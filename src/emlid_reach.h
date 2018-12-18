@@ -54,4 +54,15 @@ public:
 
 private:
 	struct vehicle_gps_position_s *_gps_position {nullptr};
+
+	enum class NMEA0183_State {
+		init = 0,
+		got_start,		// $
+		got_checksum		// *
+	};
+
+	NMEA0183_State _decode_state;
+
+	int parseChar(uint8_t b);
+
 };

@@ -32,7 +32,7 @@
  ****************************************************************************/
 
 /**
- * @file mtk.cpp
+ * @file emlid_reach.cpp
  *
  * @author Bastien Auneau <bastien.auneau@while-true.fr>
  */
@@ -55,14 +55,73 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 int
 GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 {
-	GPS_WARN("EmlidReach: Blop !!");
+	//PX4_INFO("EmlidReach: Blop !!");
+
+	// TODO RTK
+	if (output_mode != OutputMode::GPS) {
+		GPS_WARN("EMLIDREACH: Unsupported Output Mode %i", (int)output_mode);
+		return -1;
+	}
+
+	// TODO check for different baudrates : 56000, 57600, 115200, 128000, 153600
+	// TODO others baudrates are too low or high
+
+	// disable auto select fro now
+	if (baudrate == 0)
+		return -1;
+
+	PX4_INFO("EmlidReach: config with baudrate: %d", baudrate);
+
+	/* set baudrate first */
+	if (GPSHelper::setBaudrate(baudrate) != 0) {
+		return -1;
+	}
+
+	PX4_INFO("EmlidReach: config OK");
+
 	return 0;
 }
 
 int
 GPSDriverEmlidReach::receive(unsigned timeout)
 {
-	return 0;
+	uint8_t buf[GPS_READ_BUFFER_SIZE];
+
+	/* timeout additional to poll */
+	//gps_abstime time_started = gps_absolute_time();
+
+	while (true) {
+		int ret = read(buf, sizeof(buf), timeout);
+		if (ret > 0) {
+			/*std::stringstream ss;
+			//
+			for (int i=0; i<ret; i++){
+				ss << buf[i];
+			}*/
+			//PX4_INFO("EmlidReach: read: %d", ret);
+			//PX4_INFO("EmlidReach: recv: %s", buf);
+			for (int i=0; i<ret; i++){
+				parseChar(buf[i]);
+			}
+		}else{
+			usleep(20000);
+		}
+	}
 }
+
+int
+GPSDriverEmlidReach::parseChar(uint8_t b)
+{
+	int ret = 0;
+	/*switch (_decode_state){
+	case NMEA0183_State::init:
+		PX4_INFO("EmlidReach: in init");
+		break;
+	}*/
+	return ret;
+}
+
+
+
 
 
