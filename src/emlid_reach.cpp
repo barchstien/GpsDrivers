@@ -48,6 +48,8 @@
 
 #include <stdlib.h>
 
+#define NMEA_FIELD_MAX_LEN	14
+
 #define SYMBOL_START		0x24	// $
 #define SYMBOL_CHECKSUM		0x2a	// *
 #define SYMBOL_CR			0x0d	// <CR>
@@ -232,17 +234,48 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 		return;
 	}
 
+	char field[NMEA_FIELD_MAX_LEN];
+	char *start = _rx_buff, *end = _rx_buff;
+
 	if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
+		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
+		//        UTC-time  Lat     N|S        E|W #sat   Alt   Geodial-separation
+		//                            Long       Quality      Unit-alt    Diff-ref-station
+		//                                            H-dilution    Unit-Geodial
+		//                                                            Age-diff-GPS
+
+		GPS_INFO("EMLIDREACH: GGA %s", _rx_buff);
+		while (start < _rx_buff + _rx_buff_len) {
+			end = strchr(start, ',');
+			if (end == nullptr) {
+				break;
+			}
+			if (end - start > 0) {
+				// field is populated, extract value
+				// TODO keep memset after debug ?
+				memset(field, '\0', NMEA_FIELD_MAX_LEN);
+				memcpy(field, start, end - start);
+				GPS_INFO("  --  EMLIDREACH: field: %s", field);
+			} else {
+				GPS_INFO("  --  EMLIDREACH: field empty");
+			}
+			start = end + 1;
+		}
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
+		// GSA
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
+		// GST
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Detailed_Satellite_data, NMEA_TYPE_LEN) == 0) {
+		//GSV
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
+		// RMC
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Vector_track_an_Speed_over_the_Ground, NMEA_TYPE_LEN) == 0) {
+		// GTV
 
 	} else {
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _rx_buff, _rx_buff[3], _rx_buff[4], _rx_buff[5]);

@@ -45,10 +45,9 @@
 // NMEA references
 // https://en.wikipedia.org/wiki/NMEA_0183
 // http://www.catb.org/gpsd/NMEA.html
-// http://freenmea.net/docs
 
 #define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
-#define NMEA_CHECKSUM_LEN	2
+#define NMEA_CHECKSUM_LEN		2
 
 class GPSDriverEmlidReach : public GPSHelper
 {
