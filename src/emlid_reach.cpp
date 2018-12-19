@@ -87,6 +87,7 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 	GPSHelper(callback, callback_user),
 	_gps_position(gps_position)
 {
+	
 }
 
 int
@@ -142,6 +143,15 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 	}
 }
 
+void
+GPSDriverEmlidReach::init_nmea_parser()
+{
+	_decode_state = NMEA_0183_State::got_start_byte;
+	_rx_buff_len = 0;
+	// TODO keep memset after debug ?
+	//memset(_rx_buff, '\0', NMEA_SENTENCE_MAX_LEN);
+}
+
 int
 GPSDriverEmlidReach::parseChar(uint8_t b)
 {
@@ -149,23 +159,21 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	switch (_decode_state) {
 	case NMEA_0183_State::init:
 		if (b == SYMBOL_START) {
-			_decode_state = NMEA_0183_State::got_start_byte;
-			_rx_buff_len = 0;
+			init_nmea_parser();
 			_rx_buff[_rx_buff_len ++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_start_byte:
 		if (b == SYMBOL_START) {
-			_decode_state = NMEA_0183_State::got_start_byte;
-			_rx_buff_len = 0;
+			init_nmea_parser();
 			_rx_buff[_rx_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CHECKSUM) {
 			_decode_state = NMEA_0183_State::got_checksum_byte;
 			//memset(_checksum_buff, '0', sizeof(_checksum_buff));
 			_checksum_buff_len = 0;
-		} else if (_rx_buff_len >= sizeof(_rx_buff)) {
+		} else if (_rx_buff_len >= NMEA_SENTENCE_MAX_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message overflow");
 			_decode_state = NMEA_0183_State::init;
 		} else {
@@ -175,8 +183,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 
 	case NMEA_0183_State::got_checksum_byte:
 		if (b == SYMBOL_START) {
-			_decode_state = NMEA_0183_State::got_start_byte;
-			_rx_buff_len = 0;
+			init_nmea_parser();
 			_rx_buff[_rx_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
@@ -203,8 +210,10 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _rx_buff);
 				_decode_state = NMEA_0183_State::init;
 			} else {
-				//GPS_INFO("EMLIDREACH: NMEA sentence completed \n %s", _rx_buff);
+				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _rx_buff_len, _rx_buff);
 				// return length of formed buffer and re-init state machine for next sentence
+				// null terminate in case it's printed later on while debug/fix
+				_rx_buff[_rx_buff_len] = '\0';
 				ret = _rx_buff_len;
 				_decode_state = NMEA_0183_State::init;
 				
@@ -243,12 +252,14 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 		//                            Long       Quality      Unit-alt    Diff-ref-station
 		//                                            H-dilution    Unit-Geodial
 		//                                                            Age-diff-GPS
+		// $GNGGA,203735.20,5954.5926558,N,01046.5572464,E,1,07,1.0,6.317,M,38.953,M,0.0,
 
 		GPS_INFO("EMLIDREACH: GGA %s", _rx_buff);
 		while (start < _rx_buff + _rx_buff_len) {
 			end = strchr(start, ',');
-			if (end == nullptr) {
-				break;
+			if (end == NULL) {
+				// found last field
+				end = _rx_buff + _rx_buff_len;
 			}
 			if (end - start > 0) {
 				// field is populated, extract value
@@ -257,7 +268,7 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 				memcpy(field, start, end - start);
 				GPS_INFO("  --  EMLIDREACH: field: %s", field);
 			} else {
-				GPS_INFO("  --  EMLIDREACH: field empty");
+				GPS_INFO("  ++  EMLIDREACH: field empty");
 			}
 			start = end + 1;
 		}

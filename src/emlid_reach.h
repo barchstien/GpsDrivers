@@ -76,6 +76,7 @@ private:
 
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
+	void init_nmea_parser();
 	int parseChar(uint8_t b);
 	void handleNmeaSentence();
 
