@@ -45,6 +45,12 @@
 #include <ctime>
 #include <cmath>
 
+#include <stdlib.h>
+
+#define SYMBOL_START	0x24	// $
+#define SYMBOL_CHECKSUM	0x2a	// *
+#define SYMBOL_CR		0x0d	// <CR>
+#define SYMBOL_LF		0x0a	// <LF>
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
 	GPSHelper(callback, callback_user),
@@ -55,7 +61,7 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 int
 GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 {
-	//PX4_INFO("EmlidReach: Blop !!");
+	//GPS_INFO("EmlidReach: Blop !!");
 
 	// TODO RTK
 	if (output_mode != OutputMode::GPS) {
@@ -70,14 +76,14 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 	if (baudrate == 0)
 		return -1;
 
-	PX4_INFO("EmlidReach: config with baudrate: %d", baudrate);
+	GPS_INFO("EmlidReach: config with baudrate: %d", baudrate);
 
 	/* set baudrate first */
 	if (GPSHelper::setBaudrate(baudrate) != 0) {
 		return -1;
 	}
 
-	PX4_INFO("EmlidReach: config OK");
+	GPS_INFO("EmlidReach: config OK");
 
 	return 0;
 }
@@ -98,8 +104,8 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			for (int i=0; i<ret; i++){
 				ss << buf[i];
 			}*/
-			//PX4_INFO("EmlidReach: read: %d", ret);
-			//PX4_INFO("EmlidReach: recv: %s", buf);
+			//GPS_INFO("EmlidReach: read: %d", ret);
+			//GPS_INFO("EmlidReach: recv: %s", buf);
 			for (int i=0; i<ret; i++){
 				parseChar(buf[i]);
 			}
@@ -113,11 +119,77 @@ int
 GPSDriverEmlidReach::parseChar(uint8_t b)
 {
 	int ret = 0;
-	/*switch (_decode_state){
-	case NMEA0183_State::init:
-		PX4_INFO("EmlidReach: in init");
+	switch (_decode_state) {
+	case NMEA_0183_State::init:
+		if (b == SYMBOL_START) {
+			_decode_state = NMEA_0183_State::got_start_byte;
+			_rx_buff_len = 0;
+			_rx_buff[_rx_buff_len ++] = b;
+		}
 		break;
-	}*/
+
+	case NMEA_0183_State::got_start_byte:
+		if (b == SYMBOL_START) {
+			_decode_state = NMEA_0183_State::got_start_byte;
+			_rx_buff_len = 0;
+			_rx_buff[_rx_buff_len ++] = b;
+			GPS_WARN("EMLIDREACH: NMEA message truncated");
+		} else if (b == SYMBOL_CHECKSUM) {
+			_decode_state = NMEA_0183_State::got_checksum_byte;
+			//memset(_checksum_buff, '0', sizeof(_checksum_buff));
+			_checksum_buff_len = 0;
+		}
+
+		if (_rx_buff_len >= sizeof(_rx_buff)) {
+			GPS_WARN("EMLIDREACH: NMEA message overflow");
+			_decode_state = NMEA_0183_State::init;
+		} else {
+			_rx_buff[_rx_buff_len++] = b;
+		}
+		break;
+
+	case NMEA_0183_State::got_checksum_byte:
+		if (b == SYMBOL_START) {
+			_decode_state = NMEA_0183_State::got_start_byte;
+			_rx_buff_len = 0;
+			_rx_buff[_rx_buff_len ++] = b;
+			GPS_WARN("EMLIDREACH: NMEA message truncated");
+		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
+			// compute expected checksum
+			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
+			int cs = 0;
+			for (unsigned i=1; i<_rx_buff_len - 1; i++){
+				cs ^= _rx_buff[i];
+			}
+
+			// convert read checksum to int
+			int read_cs = 0;
+			read_cs = strtol(_checksum_buff, 0, 16);
+			if (read_cs == 0) {
+				if (errno == ERANGE) {
+					GPS_WARN("EMLIDREACH: NMEA checksum extraction failed: %s", _checksum_buff);
+					_decode_state = NMEA_0183_State::init;
+				}
+			}
+
+			if (cs != read_cs){
+				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _rx_buff);
+				_decode_state = NMEA_0183_State::init;
+			} else {
+				GPS_INFO("EMLIDREACH: NMEA sentence completed \n %s", _rx_buff);
+				// TODO FWD message
+				_decode_state = NMEA_0183_State::init;
+			}
+		} else if (_checksum_buff_len >= sizeof(_checksum_buff)) {
+			GPS_WARN("EMLIDREACH: NMEA message checksum overflow");
+			_decode_state = NMEA_0183_State::init;
+		} else {
+			_checksum_buff[_checksum_buff_len++] = b;
+		}
+
+		break;
+	}
+
 	return ret;
 }
 

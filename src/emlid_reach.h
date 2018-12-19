@@ -42,6 +42,7 @@
 #include "gps_helper.h"
 #include "../../definitions.h"
 
+#define NMEA_SENTENCE_MAX_LEN 82	// includes '$',<CR> and <LF> https://en.wikipedia.org/wiki/NMEA_0183
 
 class GPSDriverEmlidReach : public GPSHelper
 {
@@ -53,16 +54,24 @@ public:
 	int configure(unsigned &baudrate, OutputMode output_mode) override;
 
 private:
-	struct vehicle_gps_position_s *_gps_position {nullptr};
 
-	enum class NMEA0183_State {
+	enum class NMEA_0183_State {
 		init = 0,
-		got_start,		// $
-		got_checksum		// *
+		got_start_byte,		// $
+		got_checksum_byte	// *
 	};
 
-	NMEA0183_State _decode_state;
+	NMEA_0183_State _decode_state{NMEA_0183_State::init};
+
+	unsigned _rx_buff_len{0};
+	uint8_t _rx_buff[NMEA_SENTENCE_MAX_LEN];
+
+	unsigned _checksum_buff_len{0};
+	char _checksum_buff[2]{0, 0};
+
+	struct vehicle_gps_position_s *_gps_position {nullptr};
 
 	int parseChar(uint8_t b);
+
 
 };
