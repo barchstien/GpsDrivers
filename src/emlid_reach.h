@@ -42,7 +42,12 @@
 #include "gps_helper.h"
 #include "../../definitions.h"
 
-#define NMEA_SENTENCE_MAX_LEN 82	// includes '$',<CR> and <LF> https://en.wikipedia.org/wiki/NMEA_0183
+// NMEA references
+// https://en.wikipedia.org/wiki/NMEA_0183
+// http://www.catb.org/gpsd/NMEA.html
+
+#define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
+#define NMEA_CHECKSUM_LEN		2
 
 class GPSDriverEmlidReach : public GPSHelper
 {
@@ -67,11 +72,11 @@ private:
 	uint8_t _rx_buff[NMEA_SENTENCE_MAX_LEN];
 
 	unsigned _checksum_buff_len{0};
-	char _checksum_buff[2]{0, 0};
+	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
 
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
 	int parseChar(uint8_t b);
-
+	int handleNmeaSentence();
 
 };

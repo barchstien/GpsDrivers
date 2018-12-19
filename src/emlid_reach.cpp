@@ -99,15 +99,11 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 	while (true) {
 		int ret = read(buf, sizeof(buf), timeout);
 		if (ret > 0) {
-			/*std::stringstream ss;
-			//
 			for (int i=0; i<ret; i++){
-				ss << buf[i];
-			}*/
-			//GPS_INFO("EmlidReach: read: %d", ret);
-			//GPS_INFO("EmlidReach: recv: %s", buf);
-			for (int i=0; i<ret; i++){
-				parseChar(buf[i]);
+				int len = parseChar(buf[i]);
+				if (len > 0) {
+					handleNmeaSentence();
+				}
 			}
 		}else{
 			usleep(20000);
@@ -138,9 +134,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			_decode_state = NMEA_0183_State::got_checksum_byte;
 			//memset(_checksum_buff, '0', sizeof(_checksum_buff));
 			_checksum_buff_len = 0;
-		}
-
-		if (_rx_buff_len >= sizeof(_rx_buff)) {
+		} else if (_rx_buff_len >= sizeof(_rx_buff)) {
 			GPS_WARN("EMLIDREACH: NMEA message overflow");
 			_decode_state = NMEA_0183_State::init;
 		} else {
@@ -155,16 +149,18 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			_rx_buff[_rx_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
+			// found the end of line, undo last increment
+			//_rx_buff_len -= 1;
 			// compute expected checksum
 			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
 			int cs = 0;
-			for (unsigned i=1; i<_rx_buff_len - 1; i++){
+			for (unsigned i=1; i<_rx_buff_len; i++){
 				cs ^= _rx_buff[i];
 			}
 
 			// convert read checksum to int
 			int read_cs = 0;
-			read_cs = strtol(_checksum_buff, 0, 16);
+			read_cs = strtol(_checksum_buff, nullptr, 16);
 			if (read_cs == 0) {
 				if (errno == ERANGE) {
 					GPS_WARN("EMLIDREACH: NMEA checksum extraction failed: %s", _checksum_buff);
@@ -176,11 +172,13 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _rx_buff);
 				_decode_state = NMEA_0183_State::init;
 			} else {
-				GPS_INFO("EMLIDREACH: NMEA sentence completed \n %s", _rx_buff);
-				// TODO FWD message
+				//GPS_INFO("EMLIDREACH: NMEA sentence completed \n %s", _rx_buff);
+				// return length of formed buffer and re-init state machine for next sentence
+				ret = _rx_buff_len;
 				_decode_state = NMEA_0183_State::init;
+				
 			}
-		} else if (_checksum_buff_len >= sizeof(_checksum_buff)) {
+		} else if (_checksum_buff_len >= NMEA_CHECKSUM_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message checksum overflow");
 			_decode_state = NMEA_0183_State::init;
 		} else {
@@ -191,6 +189,12 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	}
 
 	return ret;
+}
+
+
+int
+GPSDriverEmlidReach::handleNmeaSentence() {
+	return 0;
 }
 
 
