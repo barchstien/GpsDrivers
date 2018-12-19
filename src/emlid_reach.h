@@ -45,9 +45,10 @@
 // NMEA references
 // https://en.wikipedia.org/wiki/NMEA_0183
 // http://www.catb.org/gpsd/NMEA.html
+// http://freenmea.net/docs
 
 #define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
-#define NMEA_CHECKSUM_LEN		2
+#define NMEA_CHECKSUM_LEN	2
 
 class GPSDriverEmlidReach : public GPSHelper
 {
@@ -69,7 +70,7 @@ private:
 	NMEA_0183_State _decode_state{NMEA_0183_State::init};
 
 	unsigned _rx_buff_len{0};
-	uint8_t _rx_buff[NMEA_SENTENCE_MAX_LEN];
+	char _rx_buff[NMEA_SENTENCE_MAX_LEN];
 
 	unsigned _checksum_buff_len{0};
 	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
@@ -77,6 +78,9 @@ private:
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
 	int parseChar(uint8_t b);
-	int handleNmeaSentence();
+	void handleNmeaSentence();
+
+	// debug 
+	unsigned _nmea_cnt{0};
 
 };

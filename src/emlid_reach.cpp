@@ -44,13 +44,42 @@
 #include <string.h>
 #include <ctime>
 #include <cmath>
+#include <cstring>
 
 #include <stdlib.h>
 
-#define SYMBOL_START	0x24	// $
-#define SYMBOL_CHECKSUM	0x2a	// *
-#define SYMBOL_CR		0x0d	// <CR>
-#define SYMBOL_LF		0x0a	// <LF>
+#define SYMBOL_START		0x24	// $
+#define SYMBOL_CHECKSUM		0x2a	// *
+#define SYMBOL_CR			0x0d	// <CR>
+#define SYMBOL_LF			0x0a	// <LF>
+
+#define NMEA_TALKER_OFFSET	1
+#define NMEA_TALKER_LEN		2
+
+// NMEA talker's id
+#define NMEA_TALKER_GLONASS		"GL"
+#define NMEA_TALKER_GPS			"GP"
+#define NMEA_TALKER_GNSS		"GN"	// Mixed GPS and GLONASS data, according to IEIC 61162-1
+#define NMEA_TALKER_GALILEO		"GA"
+#define NMEA_TALKER_BEIDOU_1	"BD"
+#define NMEA_TALKER_BEIDOU_2	"GB"
+
+#define NMEA_TYPE_OFFSET	3
+#define NMEA_TYPE_LEN		3
+
+// NMEA sentence types
+#define NMEA_Fix_information						"GGA"
+#define NMEA_Overall_Satellite_data					"GSA"
+#define NMEA_GPS_Pseudorange_Noise_Statistics		"GST"
+#define NMEA_Detailed_Satellite_data				"GSV"
+#define NMEA_recommended_minimum_data_for_gps		"RMC"
+#define NMEA_Vector_track_an_Speed_over_the_Ground	"VTG"
+
+// TODO
+// Heading_Magnetic	"HDT"
+// Heading_True		"HVD"
+// Time_Date_UTC	"ZDA"
+
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
 	GPSHelper(callback, callback_user),
@@ -192,9 +221,39 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 }
 
 
-int
+void
 GPSDriverEmlidReach::handleNmeaSentence() {
-	return 0;
+
+	// TODO GA vs GL vs GP vs GN talkers ??
+	// Should switch with priority GP, GN, GA (GPS, GPS+GLONASS, GALILEO)
+	// For now, let's just use GN (GPS + GLONASS)
+	if (strncmp(_rx_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GNSS, NMEA_TALKER_LEN) != 0) {
+		// ignore anything that is not GPS+GLONASS
+		return;
+	}
+
+	if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
+
+	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
+
+	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
+
+	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Detailed_Satellite_data, NMEA_TYPE_LEN) == 0) {
+
+	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
+
+	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Vector_track_an_Speed_over_the_Ground, NMEA_TYPE_LEN) == 0) {
+
+	} else {
+		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _rx_buff, _rx_buff[3], _rx_buff[4], _rx_buff[5]);
+	}
+
+
+	_nmea_cnt ++;
+	if (_nmea_cnt % 100 == 0)
+		GPS_INFO("EMLIDREACH: NMEA message number %d received", _nmea_cnt);
+	
+	return;
 }
 
 
