@@ -49,6 +49,9 @@
 #define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
 #define NMEA_CHECKSUM_LEN		2
 
+/**
+ * Driver class for Emlid Reach
+ */
 class GPSDriverEmlidReach : public GPSHelper
 {
 public:
@@ -66,20 +69,41 @@ private:
 		got_checksum_byte	// *
 	};
 
+	/** NMEA parser state machine */
 	NMEA_0183_State _decode_state{NMEA_0183_State::init};
 
-	unsigned _rx_buff_len{0};
+	/** Buffer used by parser to build NMEA sentences */
 	char _rx_buff[NMEA_SENTENCE_MAX_LEN];
+	unsigned _rx_buff_len{0};
 
-	unsigned _checksum_buff_len{0};
+	/** Buffer used by parser to build NMEA checksum */
 	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
+	unsigned _checksum_buff_len{0};
 
+	/** Pointer to object provided by caller, ie GPSHelper */
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
-	void init_nmea_parser();
+	/** Set NMEA parser state when found $ start byte */
+	void nmeaParserRestart();
+	/** Feed NMEA parser with received bytes from serial */
 	int parseChar(uint8_t b);
-	void handleNmeaSentence();
 
+// TODO delete
+#if 0
+	/** Find next ',' (comma) separated field from NMEA sentence 
+	 *  @param sentence the NMEA sentence
+	 *  @param offset from which to search for a field
+	 *  @param pointer to sentence content where a field begins
+	 *  @param length of the field found
+	 */
+	void getField(char* sentence, unsigned sentence_len, unsigned offset, char** field, unsigned* field_len);
+#endif
+
+	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper */
+	bool handleNmeaSentence();
+
+
+	// TODO delete 
 	// debug 
 	unsigned _nmea_cnt{0};
 

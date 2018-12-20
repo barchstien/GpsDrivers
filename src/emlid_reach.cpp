@@ -82,6 +82,8 @@
 // Heading_True		"HVD"
 // Time_Date_UTC	"ZDA"
 
+#define EMLID_UNUSED(x) (void)x;
+
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
 	GPSHelper(callback, callback_user),
@@ -89,6 +91,7 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 {
 	
 }
+
 
 int
 GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
@@ -120,6 +123,7 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 	return 0;
 }
 
+
 int
 GPSDriverEmlidReach::receive(unsigned timeout)
 {
@@ -127,6 +131,7 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 
 	/* timeout additional to poll */
 	//gps_abstime time_started = gps_absolute_time();
+	bool update = false;
 
 	while (true) {
 		int ret = read(buf, sizeof(buf), timeout);
@@ -134,23 +139,29 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			for (int i=0; i<ret; i++){
 				int len = parseChar(buf[i]);
 				if (len > 0) {
-					handleNmeaSentence();
+					update = handleNmeaSentence();
 				}
 			}
+			if (update) {
+				return 1;
+			}
 		}else{
+			// TODO ? return ?
 			usleep(20000);
 		}
 	}
 }
 
+
 void
-GPSDriverEmlidReach::init_nmea_parser()
+GPSDriverEmlidReach::nmeaParserRestart()
 {
 	_decode_state = NMEA_0183_State::got_start_byte;
 	_rx_buff_len = 0;
 	// TODO keep memset after debug ?
 	//memset(_rx_buff, '\0', NMEA_SENTENCE_MAX_LEN);
 }
+
 
 int
 GPSDriverEmlidReach::parseChar(uint8_t b)
@@ -159,14 +170,14 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	switch (_decode_state) {
 	case NMEA_0183_State::init:
 		if (b == SYMBOL_START) {
-			init_nmea_parser();
+			nmeaParserRestart();
 			_rx_buff[_rx_buff_len ++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_start_byte:
 		if (b == SYMBOL_START) {
-			init_nmea_parser();
+			nmeaParserRestart();
 			_rx_buff[_rx_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CHECKSUM) {
@@ -183,7 +194,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 
 	case NMEA_0183_State::got_checksum_byte:
 		if (b == SYMBOL_START) {
-			init_nmea_parser();
+			nmeaParserRestart();
 			_rx_buff[_rx_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
@@ -213,6 +224,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _rx_buff_len, _rx_buff);
 				// return length of formed buffer and re-init state machine for next sentence
 				// null terminate in case it's printed later on while debug/fix
+				// safe length-wise because NMEA_SENTENCE_MAX_LEN could contain checksum, CR and LF
 				_rx_buff[_rx_buff_len] = '\0';
 				ret = _rx_buff_len;
 				_decode_state = NMEA_0183_State::init;
@@ -231,20 +243,46 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	return ret;
 }
 
+#if 0
+void GPSDriverEmlidReach::getField(char* sentence, unsigned sentence_len, unsigned offset, char** field, unsigned* field_len)
+{
+	char *end;
+	end = strchr(sentence, ',');
+	if (end == NULL) {
+		// found last field, that is the only field not ending with a ','
+		end = _rx_buff + _rx_buff_len;
+	}
+	if (end - sentence > 0) {
+		// field is populated, extract value
+		// TODO keep memset after debug ?
+		//memset(field, '\0', NMEA_FIELD_MAX_LEN);
+		//memcpy(field, start, end - start);
+		GPS_INFO("  --  EMLIDREACH: field: %s", field);
+	} else {
+		GPS_INFO("  ++  EMLIDREACH: field empty");
+	}
+}
+#endif
 
-void
-GPSDriverEmlidReach::handleNmeaSentence() {
-
+bool
+GPSDriverEmlidReach::handleNmeaSentence()
+{
 	// TODO GA vs GL vs GP vs GN talkers ??
 	// Should switch with priority GP, GN, GA (GPS, GPS+GLONASS, GALILEO)
 	// For now, let's just use GN (GPS + GLONASS)
 	if (strncmp(_rx_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GNSS, NMEA_TALKER_LEN) != 0) {
 		// ignore anything that is not GPS+GLONASS
-		return;
+		return false;
 	}
 
-	char field[NMEA_FIELD_MAX_LEN];
-	char *start = _rx_buff, *end = _rx_buff;
+	// TODO do not use another var, it just increases STACK
+	//char field[NMEA_FIELD_MAX_LEN];
+	//char *start = _rx_buff, *end = _rx_buff;
+
+	// ignore $--GGA
+	char *ptr = _rx_buff + 6;
+	char *end_ptr;
+	bool update = false;
 
 	if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
@@ -254,8 +292,94 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 		//                                                            Age-diff-GPS
 		// $GNGGA,203735.20,5954.5926558,N,01046.5572464,E,1,07,1.0,6.317,M,38.953,M,0.0,
 
+		//int hour, min, sec, millisec;
+		double tmp_time = 0.0, lat = 0.0, lon = 0.0, alt = 0.0;
+		char ns = '?', ew = '?';
+		int num_of_sat = 0;
+		uint8_t fix_quality = 0;
+		double horizontal_dilution_precision = 0;
+
+		if (ptr && *(++ptr) != ',') { tmp_time = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { lat = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { ns = *(ptr++); }
+
+		if (ptr && *(++ptr) != ',') { lon = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { ew = *(ptr++); }
+
+		if (ptr && *(++ptr) != ',') { fix_quality = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { num_of_sat = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { horizontal_dilution_precision = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		if (ptr && *(++ptr) != ',') { alt = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		EMLID_UNUSED(tmp_time);
+		EMLID_UNUSED(horizontal_dilution_precision);
+
+		if (ns == 'S') {
+			lat = -lat;
+		}
+
+		if (ew == 'W') {
+			lon = -lon;
+		}
+
+		/* convert from degrees, minutes and seconds to degrees * 1e7 */
+		_gps_position->lat = static_cast<int>((int(lat * 0.01) + (lat * 0.01 - int(lat * 0.01)) * 100.0 / 60.0) * 10000000);
+		_gps_position->lon = static_cast<int>((int(lon * 0.01) + (lon * 0.01 - int(lon * 0.01)) * 100.0 / 60.0) * 10000000);
+		_gps_position->alt = static_cast<int>(alt * 1000);
+//		_rate_count_lat_lon++;
+
+		// 2d vs 3d fix
+		uint8_t fix_type = num_of_sat >= 4 ? 3 : 2;
+		if (fix_quality == 0) 		{ _gps_position->fix_type = 0; }
+		else if (fix_quality == 1)	{ _gps_position->fix_type = fix_type; }	// 2d or 3d
+		else if (fix_quality <= 3)	{ _gps_position->fix_type = 4; }		// RTCM code differential
+		else if (fix_quality == 4)	{ _gps_position->fix_type = 6; }		// 5: RTK float
+		else if (fix_quality == 5)	{ _gps_position->fix_type = 5; }
+
+		_gps_position->timestamp = gps_absolute_time();
+
+		_gps_position->vel_m_s = 0;                                  /**< GPS ground speed (m/s) */
+		_gps_position->vel_n_m_s = 0;                                /**< GPS ground speed in m/s */
+		_gps_position->vel_e_m_s = 0;                                /**< GPS ground speed in m/s */
+		_gps_position->vel_d_m_s = 0;                                /**< GPS ground speed in m/s */
+		_gps_position->cog_rad =
+			0;                                  /**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
+		_gps_position->vel_ned_valid = true;                         /**< Flag to indicate if NED speed is valid */
+		_gps_position->c_variance_rad = 0.1f;
+
+		update = true;
+
+#if 0
+//forget about time, coz need date to compute usec since EPOCH
+		int hour = static_cast<int>(tmp_time / 10000);
+		int min = static_cast<int>((tmp_time - hour * 10000) / 100);
+		double sec = static_cast<double>(tmp_time - hour * 10000 - min * 100);
+
+		/*
+		 * convert to unix timestamp
+		 */
+		struct tm timeinfo = {};
+		timeinfo.tm_year = year - 1900;
+		timeinfo.tm_mon = month - 1;
+		timeinfo.tm_mday = day;
+		timeinfo.tm_hour = ashtech_hour;
+		timeinfo.tm_min = ashtech_minute;
+		timeinfo.tm_sec = int(ashtech_sec);
+		timeinfo.tm_isdst = 0;
+#endif
+
+// TODO delete
+#if 0 // ref of working feld extraction
 		GPS_INFO("EMLIDREACH: GGA %s", _rx_buff);
 		while (start < _rx_buff + _rx_buff_len) {
+
+///
 			end = strchr(start, ',');
 			if (end == NULL) {
 				// found last field
@@ -270,8 +394,10 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 			} else {
 				GPS_INFO("  ++  EMLIDREACH: field empty");
 			}
+///
 			start = end + 1;
 		}
+#endif
 
 	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		// GSA
@@ -293,11 +419,17 @@ GPSDriverEmlidReach::handleNmeaSentence() {
 	}
 
 
+
+	// TOD is this required so that GPS timing it taken ?
+	if (update) {
+//		_gps_position->timestamp_time_relative = (int32_t)(_last_timestamp_time - _gps_position->timestamp);
+	}
+
 	_nmea_cnt ++;
 	if (_nmea_cnt % 100 == 0)
 		GPS_INFO("EMLIDREACH: NMEA message number %d received", _nmea_cnt);
 	
-	return;
+	return update;
 }
 
 
