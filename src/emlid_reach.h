@@ -72,9 +72,17 @@ private:
 	/** NMEA parser state machine */
 	NMEA_0183_State _decode_state{NMEA_0183_State::init};
 
+	/** Buffer used to receive data from serial*/
+	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
+	unsigned _read_buff_len{0};
+	/** Pointer to next received byte to be processed, 
+	 *  as data may been left unprocessed after NMEA message completed
+	 */
+	uint8_t *_read_buff_ptr{_read_buff + GPS_READ_BUFFER_SIZE};
+
 	/** Buffer used by parser to build NMEA sentences */
-	char _rx_buff[NMEA_SENTENCE_MAX_LEN];
-	unsigned _rx_buff_len{0};
+	char _nmea_buff[NMEA_SENTENCE_MAX_LEN];
+	unsigned _nmea_buff_len{0};
 
 	/** Buffer used by parser to build NMEA checksum */
 	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
@@ -88,18 +96,9 @@ private:
 	/** Feed NMEA parser with received bytes from serial */
 	int parseChar(uint8_t b);
 
-// TODO delete
-#if 0
-	/** Find next ',' (comma) separated field from NMEA sentence 
-	 *  @param sentence the NMEA sentence
-	 *  @param offset from which to search for a field
-	 *  @param pointer to sentence content where a field begins
-	 *  @param length of the field found
+	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper 
+	 *  @return true if gps_position has been updated
 	 */
-	void getField(char* sentence, unsigned sentence_len, unsigned offset, char** field, unsigned* field_len);
-#endif
-
-	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper */
 	bool handleNmeaSentence();
 
 

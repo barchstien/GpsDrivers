@@ -96,8 +96,6 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 int
 GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 {
-	//GPS_INFO("EmlidReach: Blop !!");
-
 	// TODO RTK
 	if (output_mode != OutputMode::GPS) {
 		GPS_WARN("EMLIDREACH: Unsupported Output Mode %i", (int)output_mode);
@@ -127,27 +125,22 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 int
 GPSDriverEmlidReach::receive(unsigned timeout)
 {
-	uint8_t buf[GPS_READ_BUFFER_SIZE];
-
-	/* timeout additional to poll */
-	//gps_abstime time_started = gps_absolute_time();
-	bool update = false;
-
 	while (true) {
-		int ret = read(buf, sizeof(buf), timeout);
-		if (ret > 0) {
-			for (int i=0; i<ret; i++){
-				int len = parseChar(buf[i]);
-				if (len > 0) {
-					update = handleNmeaSentence();
+		if (_read_buff_ptr >= _read_buff + _read_buff_len) {
+			// no more data in buff to process, read from serial
+			_read_buff_len = read(_read_buff, sizeof(_read_buff), timeout);
+			if (_read_buff_len > 0) {
+				_read_buff_ptr = _read_buff;
+			}
+		} else {
+			// process data in buffer from previous read
+			while (_read_buff_ptr < _read_buff + _read_buff_len) {
+				if (parseChar(*(_read_buff_ptr++)) > 0) {
+					if (handleNmeaSentence()) {
+						return 1;
+					}
 				}
 			}
-			if (update) {
-				return 1;
-			}
-		}else{
-			// TODO ? return ?
-			usleep(20000);
 		}
 	}
 }
@@ -157,9 +150,7 @@ void
 GPSDriverEmlidReach::nmeaParserRestart()
 {
 	_decode_state = NMEA_0183_State::got_start_byte;
-	_rx_buff_len = 0;
-	// TODO keep memset after debug ?
-	//memset(_rx_buff, '\0', NMEA_SENTENCE_MAX_LEN);
+	_nmea_buff_len = 0;
 }
 
 
@@ -171,40 +162,37 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	case NMEA_0183_State::init:
 		if (b == SYMBOL_START) {
 			nmeaParserRestart();
-			_rx_buff[_rx_buff_len ++] = b;
+			_nmea_buff[_nmea_buff_len ++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_start_byte:
 		if (b == SYMBOL_START) {
 			nmeaParserRestart();
-			_rx_buff[_rx_buff_len ++] = b;
+			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CHECKSUM) {
 			_decode_state = NMEA_0183_State::got_checksum_byte;
-			//memset(_checksum_buff, '0', sizeof(_checksum_buff));
 			_checksum_buff_len = 0;
-		} else if (_rx_buff_len >= NMEA_SENTENCE_MAX_LEN) {
+		} else if (_nmea_buff_len >= NMEA_SENTENCE_MAX_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message overflow");
 			_decode_state = NMEA_0183_State::init;
 		} else {
-			_rx_buff[_rx_buff_len++] = b;
+			_nmea_buff[_nmea_buff_len++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_checksum_byte:
 		if (b == SYMBOL_START) {
 			nmeaParserRestart();
-			_rx_buff[_rx_buff_len ++] = b;
+			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
-			// found the end of line, undo last increment
-			//_rx_buff_len -= 1;
 			// compute expected checksum
 			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
 			int cs = 0;
-			for (unsigned i=1; i<_rx_buff_len; i++){
-				cs ^= _rx_buff[i];
+			for (unsigned i=1; i<_nmea_buff_len; i++){
+				cs ^= _nmea_buff[i];
 			}
 
 			// convert read checksum to int
@@ -218,15 +206,15 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			}
 
 			if (cs != read_cs){
-				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _rx_buff);
+				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _nmea_buff);
 				_decode_state = NMEA_0183_State::init;
 			} else {
-				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _rx_buff_len, _rx_buff);
+				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _nmea_buff_len, _nmea_buff);
 				// return length of formed buffer and re-init state machine for next sentence
-				// null terminate in case it's printed later on while debug/fix
+				// null terminate in case it's printed later on, while debug/fixing
 				// safe length-wise because NMEA_SENTENCE_MAX_LEN could contain checksum, CR and LF
-				_rx_buff[_rx_buff_len] = '\0';
-				ret = _rx_buff_len;
+				_nmea_buff[_nmea_buff_len] = '\0';
+				ret = _nmea_buff_len;
 				_decode_state = NMEA_0183_State::init;
 				
 			}
@@ -243,26 +231,6 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	return ret;
 }
 
-#if 0
-void GPSDriverEmlidReach::getField(char* sentence, unsigned sentence_len, unsigned offset, char** field, unsigned* field_len)
-{
-	char *end;
-	end = strchr(sentence, ',');
-	if (end == NULL) {
-		// found last field, that is the only field not ending with a ','
-		end = _rx_buff + _rx_buff_len;
-	}
-	if (end - sentence > 0) {
-		// field is populated, extract value
-		// TODO keep memset after debug ?
-		//memset(field, '\0', NMEA_FIELD_MAX_LEN);
-		//memcpy(field, start, end - start);
-		GPS_INFO("  --  EMLIDREACH: field: %s", field);
-	} else {
-		GPS_INFO("  ++  EMLIDREACH: field empty");
-	}
-}
-#endif
 
 bool
 GPSDriverEmlidReach::handleNmeaSentence()
@@ -270,21 +238,17 @@ GPSDriverEmlidReach::handleNmeaSentence()
 	// TODO GA vs GL vs GP vs GN talkers ??
 	// Should switch with priority GP, GN, GA (GPS, GPS+GLONASS, GALILEO)
 	// For now, let's just use GN (GPS + GLONASS)
-	if (strncmp(_rx_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GNSS, NMEA_TALKER_LEN) != 0) {
+	if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GNSS, NMEA_TALKER_LEN) != 0) {
 		// ignore anything that is not GPS+GLONASS
 		return false;
 	}
 
-	// TODO do not use another var, it just increases STACK
-	//char field[NMEA_FIELD_MAX_LEN];
-	//char *start = _rx_buff, *end = _rx_buff;
-
-	// ignore $--GGA
-	char *ptr = _rx_buff + 6;
+	// pass talker + type field, ie $--GGA
+	char *ptr = _nmea_buff + 6;
 	char *end_ptr;
 	bool update = false;
 
-	if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
+	if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
 		//        UTC-time  Lat     N|S        E|W #sat   Alt   Geodial-separation
 		//                            Long       Quality      Unit-alt    Diff-ref-station
@@ -355,67 +319,23 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 		update = true;
 
-#if 0
-//forget about time, coz need date to compute usec since EPOCH
-		int hour = static_cast<int>(tmp_time / 10000);
-		int min = static_cast<int>((tmp_time - hour * 10000) / 100);
-		double sec = static_cast<double>(tmp_time - hour * 10000 - min * 100);
-
-		/*
-		 * convert to unix timestamp
-		 */
-		struct tm timeinfo = {};
-		timeinfo.tm_year = year - 1900;
-		timeinfo.tm_mon = month - 1;
-		timeinfo.tm_mday = day;
-		timeinfo.tm_hour = ashtech_hour;
-		timeinfo.tm_min = ashtech_minute;
-		timeinfo.tm_sec = int(ashtech_sec);
-		timeinfo.tm_isdst = 0;
-#endif
-
-// TODO delete
-#if 0 // ref of working feld extraction
-		GPS_INFO("EMLIDREACH: GGA %s", _rx_buff);
-		while (start < _rx_buff + _rx_buff_len) {
-
-///
-			end = strchr(start, ',');
-			if (end == NULL) {
-				// found last field
-				end = _rx_buff + _rx_buff_len;
-			}
-			if (end - start > 0) {
-				// field is populated, extract value
-				// TODO keep memset after debug ?
-				memset(field, '\0', NMEA_FIELD_MAX_LEN);
-				memcpy(field, start, end - start);
-				GPS_INFO("  --  EMLIDREACH: field: %s", field);
-			} else {
-				GPS_INFO("  ++  EMLIDREACH: field empty");
-			}
-///
-			start = end + 1;
-		}
-#endif
-
-	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		// GSA
 
-	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
 		// GST
 
-	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Detailed_Satellite_data, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Detailed_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		//GSV
 
-	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
 		// RMC
 
-	} else if (strncmp(_rx_buff + NMEA_TYPE_OFFSET, NMEA_Vector_track_an_Speed_over_the_Ground, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Vector_track_an_Speed_over_the_Ground, NMEA_TYPE_LEN) == 0) {
 		// GTV
 
 	} else {
-		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _rx_buff, _rx_buff[3], _rx_buff[4], _rx_buff[5]);
+		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
 	}
 
 
