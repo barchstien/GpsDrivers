@@ -250,18 +250,30 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 	if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
-		//        UTC-time  Lat     N|S        E|W #sat   Alt   Geodial-separation
-		//                            Long       Quality      Unit-alt    Diff-ref-station
-		//                                            H-dilution    Unit-Geodial
-		//                                                            Age-diff-GPS
+		//        1         2       3 4        5 6 7  8   9   10 11 12 13 14
+		// 1. UTC time
+		// 2. Latitude
+		// 3. N|S
+		// 4. Longitude
+		// 5. E|W
+		// 6. fix quality
+		// 7. Number of satellites
+		// 8. HDOP
+		// 9. Altitude
+		// 10. Altitude unit
+		// 11. Geoidal separation
+		// 12. Geoidal separation unit
+		// 13. Age of differentil GPS data
+		// 14. Differential reference station ID
+		//
 		// $GNGGA,203735.20,5954.5926558,N,01046.5572464,E,1,07,1.0,6.317,M,38.953,M,0.0,
 
 		//int hour, min, sec, millisec;
 		double tmp_time = 0.0, lat = 0.0, lon = 0.0, alt = 0.0;
 		char ns = '?', ew = '?';
-		int num_of_sat = 0;
+		int sat_used = 0;
 		uint8_t fix_quality = 0;
-		double horizontal_dilution_precision = 0;
+		double hdop = 0;
 
 		if (ptr && *(++ptr) != ',') { tmp_time = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
@@ -275,14 +287,14 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 		if (ptr && *(++ptr) != ',') { fix_quality = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 
-		if (ptr && *(++ptr) != ',') { num_of_sat = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { sat_used = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 
-		if (ptr && *(++ptr) != ',') { horizontal_dilution_precision = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { hdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
 		if (ptr && *(++ptr) != ',') { alt = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
 		EMLID_UNUSED(tmp_time);
-		EMLID_UNUSED(horizontal_dilution_precision);
+		EMLID_UNUSED(hdop);
 
 		if (ns == 'S') {
 			lat = -lat;
@@ -296,59 +308,134 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		_gps_position->lat = static_cast<int>((int(lat * 0.01) + (lat * 0.01 - int(lat * 0.01)) * 100.0 / 60.0) * 10000000);
 		_gps_position->lon = static_cast<int>((int(lon * 0.01) + (lon * 0.01 - int(lon * 0.01)) * 100.0 / 60.0) * 10000000);
 		_gps_position->alt = static_cast<int>(alt * 1000);
-//		_rate_count_lat_lon++;
+		_rate_count_lat_lon++;
 
-		// 2d vs 3d fix
-		uint8_t fix_type = num_of_sat >= 4 ? 3 : 2;
+#if 0
+		// 3d fix if #sat >=4, else 2d fix
+		uint8_t fix_type = sat_used >= 4 ? 3 : 2;
+#endif
+
 		if (fix_quality == 0) 		{ _gps_position->fix_type = 0; }
-		else if (fix_quality == 1)	{ _gps_position->fix_type = fix_type; }	// 2d or 3d
+		else if (fix_quality == 1)	{ _gps_position->fix_type = (uint8_t)_fix_mode; }	// 2d or 3d from GSA message
 		else if (fix_quality <= 3)	{ _gps_position->fix_type = 4; }		// RTCM code differential
 		else if (fix_quality == 4)	{ _gps_position->fix_type = 6; }		// 5: RTK float
 		else if (fix_quality == 5)	{ _gps_position->fix_type = 5; }
 
+		_gps_position->satellites_used = sat_used;
+
 		_gps_position->timestamp = gps_absolute_time();
 
-		_gps_position->vel_m_s = 0;                                  /**< GPS ground speed (m/s) */
-		_gps_position->vel_n_m_s = 0;                                /**< GPS ground speed in m/s */
-		_gps_position->vel_e_m_s = 0;                                /**< GPS ground speed in m/s */
-		_gps_position->vel_d_m_s = 0;                                /**< GPS ground speed in m/s */
-		_gps_position->cog_rad =
-			0;                                  /**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
-		_gps_position->vel_ned_valid = true;                         /**< Flag to indicate if NED speed is valid */
+		_gps_position->vel_m_s = 0;		/**< GPS ground speed (m/s) */
+		_gps_position->vel_n_m_s = 0;	/**< GPS North velocity (m/s) */
+		_gps_position->vel_e_m_s = 0;	/**< GPS East velocity (m/s) */
+		_gps_position->vel_d_m_s = 0;	/**< GPS Down velocity (m/s) */
+		_gps_position->cog_rad = 0;		/**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
+		_gps_position->vel_ned_valid = false;	/**< Flag to indicate if NED speed is valid */
 		_gps_position->c_variance_rad = 0.1f;
 
 		update = true;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
-		// GSA
+		// $--GSA,a,a,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x.x,x.x,x.x*hh<CR><LF>
+		//        1 2 3                         14 15 16  17
+		// 1. M=Manual (2d vs 3d fix), A=Automatic
+		// 2. 1=no_fix, 2=2D_fix, 3=3D_fix
+		// 3. 1st satellite used for fix
+		// [...]
+		// 14. 12th satellite used for fix
+		// 15. PDOP
+		// 16. HDOP
+		// 17. VDOP
+
+		double pdop = 0, hdop = 0, vdop = 0;
+
+		if (ptr && *(++ptr) != ',') { /* ignore 1. */ }
+		if (ptr && *(++ptr) != ',') { _fix_mode = (Fix_Mode)*(ptr++); }
+		/* ignore 3. to 14. */
+		for (int i=3; i<= 14; i++) {
+			if (ptr && *(++ptr) != ',') { }
+		}
+		if (ptr && *(++ptr) != ',') { pdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { hdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { vdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		EMLID_UNUSED(pdop);
+		_gps_position->hdop = hdop;
+		_gps_position->vdop = vdop;
+
+		update = true;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
-		// GST
+		// $--GST,hhmmss.ss,x,x,x,x,x,x,x,*hh<CR><LF>
+		//        1         2 3 4 5 6 7 8
+		// 1. UTC time
+		// 2. Total RMS standard deviation of ranges inputs to the navigation solution
+		// 3. Standard deviation (meters) of semi-major axis of error ellipse
+		// 4. Standard deviation (meters) of semi-minor axis of error ellipse
+		// 5. Orientation of semi-major axis of error ellipse (true north degrees)
+		// 6. Standard deviation (meters) of latitude error
+		// 7. Standard deviation (meters) of longitude error
+		// 8. Standard deviation (meters) of altitude error
+		// 
+
+		double tmp_time = 0.0, rms_err = 0.0, dev_maj = 0.0, dev_min = 0.0;
+		double north_deg = 0.0, lat_err = 0.0, lon_err = 0.0, alt_err = 0.0;
+
+		if (ptr && *(++ptr) != ',') { tmp_time = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { rms_err = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { dev_maj = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { dev_min = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { north_deg = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { lat_err = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { lon_err = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { alt_err = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		EMLID_UNUSED(tmp_time);
+		EMLID_UNUSED(rms_err);
+		EMLID_UNUSED(dev_maj);
+		EMLID_UNUSED(dev_min);
+		EMLID_UNUSED(north_deg);
+
+		_gps_position->eph = sqrtf(static_cast<float>(lat_err) * static_cast<float>(lat_err)
+					   + static_cast<float>(lon_err) * static_cast<float>(lon_err));
+		_gps_position->epv = static_cast<float>(alt_err);
+
+		_gps_position->s_variance_m_s = 0;
+
+		update = true;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Detailed_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		//GSV
+		// ignore for now, seam to be used by base ?
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
-		// RMC
+		// $--RMC,hhmmss.ss,A,llll.ll,a,yyyyy.yy,a,x.x,x.x,xxxx,x.x,a,m,*hh<CR><LF>
+		//        1         2 3       4 5        6 7   8   9    10  11 12
+		// 1. UTC Time
+		// 2. Status, V=Navigation receiver warning A=Valid 
+		// 3. Latitude
+		// 4. N|S
+		// 5. Longitude
+		// 6. E|W
+		// 7. Speed over ground, knots
+		// 8. Track made good, degrees true
+		// 9. Date ddmmyy
+		// 10. Magnetic Variation, degrees
+		// 11. E|W
+		// 12. FAA mode indicator
+
+		// TODO Date here !
+
+//		update = true;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Vector_track_an_Speed_over_the_Ground, NMEA_TYPE_LEN) == 0) {
-		// GTV
+		// VTG
+		// ignore for now, not sure how to give it to caller
 
 	} else {
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
 	}
 
-
-
-	// TOD is this required so that GPS timing it taken ?
-	if (update) {
-//		_gps_position->timestamp_time_relative = (int32_t)(_last_timestamp_time - _gps_position->timestamp);
-	}
-
-	_nmea_cnt ++;
-	if (_nmea_cnt % 100 == 0)
-		GPS_INFO("EMLIDREACH: NMEA message number %d received", _nmea_cnt);
-	
 	return update;
 }
 
