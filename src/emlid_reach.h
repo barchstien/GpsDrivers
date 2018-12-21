@@ -42,15 +42,21 @@
 #include "gps_helper.h"
 #include "../../definitions.h"
 
+// Emlid documentation
+//   https://docs.emlid.com/reachm-plus/
 // NMEA references
-// https://en.wikipedia.org/wiki/NMEA_0183
-// http://www.catb.org/gpsd/NMEA.html
+//   https://en.wikipedia.org/wiki/NMEA_0183
+//   http://www.catb.org/gpsd/NMEA.html
 
 #define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
 #define NMEA_CHECKSUM_LEN		2
 
+// TODO ? join GGA & GST on timestamp ? So far using FIFO
+
 /**
  * Driver class for Emlid Reach
+ * Populates caller provided vehicle_gps_position_s when GGA received
+ * Other NMEA messages are cached by the driver to complete messages emitted upon GGA
  */
 class GPSDriverEmlidReach : public GPSHelper
 {
@@ -73,13 +79,11 @@ private:
 	NMEA_0183_State _decode_state{NMEA_0183_State::init};
 
 	enum class Fix_Mode {
-		none = 0,
-		fix_2d = 2,
-		fix_3d = 3
+		none 		= 0,
+		none_bis 	= 1,
+		fix_2d 		= 2,
+		fix_3d 		= 3
 	};
-
-	/** Fix mode received in GSA message */
-	Fix_Mode _fix_mode{Fix_Mode::none};
 
 	/** Buffer used to receive data from serial*/
 	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
@@ -99,6 +103,22 @@ private:
 
 	/** Pointer to object provided by caller, ie GPSHelper */
 	struct vehicle_gps_position_s *_gps_position {nullptr};
+
+
+	///// NMEA messages caches /////
+	/** Fix mode from GSA message */
+	Fix_Mode _fix_mode{Fix_Mode::none};
+
+	/** HDOP from GSA message */
+	double _hdop{0.0};
+	/** VDOP from GSA message */
+	double _vdop{0.0};
+
+	/** eph from GST message */
+	double _eph{0.0};
+	/** epv from GST message */
+	double _epv{0.0};
+
 
 	/** Set NMEA parser state when found $ start byte */
 	void nmeaParserRestart();
