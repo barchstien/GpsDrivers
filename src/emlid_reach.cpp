@@ -85,9 +85,9 @@
 
 #define GPS_PI		3.141592653589793238462643383280
 
-#define AUTO_DETECT_MAX_TIMEOUT		10
+#define AUTO_DETECT_MAX_TIMEOUT		100	// large because small max timeout set in read() call
 #define AUTO_DETECT_MAX_PARSE_ERR	2
-#define AUTO_DETECT_MAX_READ_BYTE	NMEA_SENTENCE_MAX_LEN * 10
+#define AUTO_DETECT_MAX_READ_NMEA	10
 
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
@@ -107,13 +107,14 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 
 	// TODO check for different baudrates : 56000, 57600, 115200, 128000, 153600
 	// TODO others baudrates are too low or high
+#if 0
 	unsigned baud_allowed[]{4800, 9600, 14400, 19200, 28800, 38400, 56000, 57600, 115200, 128000, 153600, 230400, 256000, 460800};
 	EMLID_UNUSED(baud_allowed);
-
-	// disable auto select fro now
+#endif
+	// disable auto select for now
 	if (baudrate == 0)
 		return -1;
-
+#if 0
 	for (unsigned i=0; i<sizeof(baud_allowed) / sizeof(baud_allowed[0]); i++) {
 		if (baudrate > 0 && baudrate != baud_allowed[i]) {
 			continue;
@@ -132,26 +133,29 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 		GPS_INFO("EmlidReach: config OK");
 		return 0;
 	}
-
-	return -1;;
+#else
+	if (GPSHelper::setBaudrate(baudrate) == 0) {
+		return 0;
+	}
+#endif
+	return -1;
 }
 
 
 bool
 GPSDriverEmlidReach::testConnection()
 {
-	unsigned timeout_cnt = 0, byte_read = 0;
+	unsigned timeout_cnt = 0;
 	while (timeout_cnt < AUTO_DETECT_MAX_TIMEOUT 
 		&& _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
-		&& byte_read < AUTO_DETECT_MAX_READ_BYTE)
+		&& _nmea_cnt < AUTO_DETECT_MAX_READ_NMEA)
 	{
-		if (receive(500) == 0) {
+		if (receive(50000) == 0) { // timeout larger than what defined in read() are truncated
 			timeout_cnt ++;
-		} else {
-			byte_read ++;
 		}
 	}
-	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
+	GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
+	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT || _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
 }
 
 
@@ -166,7 +170,7 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 				_read_buff_ptr = _read_buff;
 			} else {
 				// timeout occured
-				return 0;
+				//return 0;
 			}
 		} else {
 			// process data in buffer from previous read
@@ -526,6 +530,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		}
 		if (ptr && *(++ptr) != ',') { _speed_kmph = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
+		//GPS_INFO("EMLIDREACH: $--VTG _course_deg %f  _speed_kmph %f", _course_deg, _speed_kmph);
 
 	} else {
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
