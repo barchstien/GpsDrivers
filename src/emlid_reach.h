@@ -78,13 +78,6 @@ private:
 	/** NMEA parser state machine */
 	NMEA_0183_State _decode_state{NMEA_0183_State::init};
 
-	enum class Fix_Mode {
-		none 		= 0,
-		none_bis 	= 1,
-		fix_2d 		= 2,
-		fix_3d 		= 3
-	};
-
 	/** Buffer used to receive data from serial*/
 	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
 	unsigned _read_buff_len{0};
@@ -106,14 +99,10 @@ private:
 
 
 	///// NMEA messages caches /////
-	/** Fix mode from GSA message */
-	Fix_Mode _fix_mode{Fix_Mode::none};
-
 	/** HDOP from GSA message */
 	double _hdop{0.0};
 	/** VDOP from GSA message */
 	double _vdop{0.0};
-
 	/** eph from GST message */
 	double _eph{0.0};
 	/** epv from GST message */

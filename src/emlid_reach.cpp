@@ -326,11 +326,6 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		_gps_position->hdop = _hdop;
 		_gps_position->vdop = _vdop;
 
-#if 0
-		// 3d fix if #sat >=4, else 2d fix
-		uint8_t fix_type = sat_in_view >= 4 ? 3 : 2;
-#endif
-
 		// vehicle_gps_position_s::fix_type
 		//  0-1: no fix,
 		//  2: 2D fix,
@@ -339,8 +334,10 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		//  5: Real-Time Kinematic, float,
 		//  6: Real-Time Kinematic, fixed,
 		//  8: Extrapolated. Some applications will not use the value of this field unless it is at least two, so always correctly fill in the fix.
+
+		uint8_t fix_mode = sat_in_view >= 4 ? 3 : 2; // 3d vs 2d fix
 		if (fix_quality == 0) 		{ _gps_position->fix_type = 0; }
-		else if (fix_quality == 1)	{ _gps_position->fix_type = (uint8_t)_fix_mode; }	// 2d or 3d from GSA message
+		else if (fix_quality == 1)	{ _gps_position->fix_type = fix_mode; }
 		else if (fix_quality <= 3)	{ _gps_position->fix_type = 4; }		// differential & PPS
 		else if (fix_quality == 4)	{ _gps_position->fix_type = 6; }		// RTK fixed
 		else if (fix_quality == 5)	{ _gps_position->fix_type = 5; }		// RTF float
@@ -359,6 +356,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		update = true;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
+		// Talker ids : GA|GL|GP
 		// $--GSA,a,a,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x.x,x.x,x.x*hh<CR><LF>
 		//        1 2 3                         14 15 16  17
 		// 1. M=Manual (2d vs 3d fix), A=Automatic
@@ -371,9 +369,11 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		// 17. VDOP
 
 		double pdop = 0.0;
+		uint8_t fix_mode = 0;
 
+		// TODO : keep _fix_mode ? Better use GN fix mode from GGA
 		if (ptr && *(++ptr) != ',') { /* ignore 1. */ }
-		if (ptr && *(++ptr) != ',') { _fix_mode = (Fix_Mode)*(ptr++); }
+		if (ptr && *(++ptr) != ',') { fix_mode = *(ptr++); }
 		/* ignore 3. to 14. */
 		for (int i=3; i<= 14; i++) {
 			if (ptr && *(++ptr) != ',') { }
@@ -383,6 +383,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		if (ptr && *(++ptr) != ',') { _vdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
 		EMLID_UNUSED(pdop);
+		EMLID_UNUSED(fix_mode);
 
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
@@ -425,7 +426,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Satellite_in_view, NMEA_TYPE_LEN) == 0) {
 		//GSV
-		// ignore for now, describe each satellite locked elevation, azimuth and SNR
+		// ignore for now, describe each satellite locked elevation, azimuth and SNR GA|GL|GP
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
 		// $--RMC,hhmmss.ss,A,llll.ll,a,yyyyy.yy,a,x.x,x.x,xxxx,x.x,a,m,*hh<CR><LF>
