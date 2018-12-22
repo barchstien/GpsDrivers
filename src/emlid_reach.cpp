@@ -83,6 +83,12 @@
 
 #define EMLID_UNUSED(x) (void)x;
 
+#define GPS_PI		3.141592653589793238462643383280
+
+#define AUTO_DETECT_MAX_TIMEOUT		10
+#define AUTO_DETECT_MAX_PARSE_ERR	2
+#define AUTO_DETECT_MAX_READ_BYTE	NMEA_SENTENCE_MAX_LEN * 10
+
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
 	GPSHelper(callback, callback_user),
@@ -101,21 +107,51 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 
 	// TODO check for different baudrates : 56000, 57600, 115200, 128000, 153600
 	// TODO others baudrates are too low or high
+	unsigned baud_allowed[]{4800, 9600, 14400, 19200, 28800, 38400, 56000, 57600, 115200, 128000, 153600, 230400, 256000, 460800};
+	EMLID_UNUSED(baud_allowed);
 
 	// disable auto select fro now
 	if (baudrate == 0)
 		return -1;
 
-	GPS_INFO("EmlidReach: config with baudrate: %d", baudrate);
+	for (unsigned i=0; i<sizeof(baud_allowed) / sizeof(baud_allowed[0]); i++) {
+		if (baudrate > 0 && baudrate != baud_allowed[i]) {
+			continue;
+		}
+		_nmea_parse_err_cnt = 0;
+		_nmea_cnt = 0;
+		GPS_INFO("EmlidReach: config with baudrate: %d", baudrate);
+		if (GPSHelper::setBaudrate(baudrate) != 0) {
+			continue;
+		}
+		// TODO test connection (timeout, bad CRC)
+		if (! testConnection()) {
+			continue;
+		}
 
-	/* set baudrate first */
-	if (GPSHelper::setBaudrate(baudrate) != 0) {
-		return -1;
+		GPS_INFO("EmlidReach: config OK");
+		return 0;
 	}
 
-	GPS_INFO("EmlidReach: config OK");
+	return -1;;
+}
 
-	return 0;
+
+bool
+GPSDriverEmlidReach::testConnection()
+{
+	unsigned timeout_cnt = 0, byte_read = 0;
+	while (timeout_cnt < AUTO_DETECT_MAX_TIMEOUT 
+		&& _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
+		&& byte_read < AUTO_DETECT_MAX_READ_BYTE)
+	{
+		if (receive(500) == 0) {
+			timeout_cnt ++;
+		} else {
+			byte_read ++;
+		}
+	}
+	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
 }
 
 
@@ -128,14 +164,21 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			_read_buff_len = read(_read_buff, sizeof(_read_buff), timeout);
 			if (_read_buff_len > 0) {
 				_read_buff_ptr = _read_buff;
+			} else {
+				// timeout occured
+				return 0;
 			}
 		} else {
 			// process data in buffer from previous read
 			while (_read_buff_ptr < _read_buff + _read_buff_len) {
-				if (parseChar(*(_read_buff_ptr++)) > 0) {
+				int ret = parseChar(*(_read_buff_ptr++));
+				if (ret > 0) {
+					_nmea_cnt ++;
 					if (handleNmeaSentence()) {
 						return 1;
 					}
+				} else if (ret < 0) {
+					_nmea_parse_err_cnt ++;
 				}
 			}
 		}
@@ -168,12 +211,14 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
+			ret = -1;
 		} else if (b == SYMBOL_CHECKSUM) {
 			_decode_state = NMEA_0183_State::got_checksum_byte;
 			_checksum_buff_len = 0;
 		} else if (_nmea_buff_len >= NMEA_SENTENCE_MAX_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message overflow");
 			_decode_state = NMEA_0183_State::init;
+			ret = -1;
 		} else {
 			_nmea_buff[_nmea_buff_len++] = b;
 		}
@@ -184,6 +229,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
+			ret = -1;
 		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
 			// compute expected checksum
 			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
@@ -199,12 +245,14 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 				if (errno == ERANGE) {
 					GPS_WARN("EMLIDREACH: NMEA checksum extraction failed: %s", _checksum_buff);
 					_decode_state = NMEA_0183_State::init;
+					ret = -1;
 				}
 			}
 
 			if (cs != read_cs){
 				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _nmea_buff);
 				_decode_state = NMEA_0183_State::init;
+				ret = -1;
 			} else {
 				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _nmea_buff_len, _nmea_buff);
 				// return length of formed buffer and re-init state machine for next sentence
@@ -218,6 +266,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 		} else if (_checksum_buff_len >= NMEA_CHECKSUM_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message checksum overflow");
 			_decode_state = NMEA_0183_State::init;
+			ret = -1;
 		} else {
 			_checksum_buff[_checksum_buff_len++] = b;
 		}
@@ -345,13 +394,17 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 		_gps_position->satellites_used = sat_in_view;
 
+#if 0
 		_gps_position->vel_m_s = 0;		/**< GPS ground speed (m/s) */
 		_gps_position->vel_n_m_s = 0;	/**< GPS North velocity (m/s) */
 		_gps_position->vel_e_m_s = 0;	/**< GPS East velocity (m/s) */
 		_gps_position->vel_d_m_s = 0;	/**< GPS Down velocity (m/s) */
 		_gps_position->cog_rad = 0;		/**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
 		_gps_position->vel_ned_valid = false;	/**< Flag to indicate if NED speed is valid */
-		_gps_position->c_variance_rad = 0.1f;
+#endif
+		computeNedVelocity();
+
+//		_gps_position->c_variance_rad = 0.1f;
 
 		update = true;
 
@@ -368,10 +421,9 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		// 16. HDOP
 		// 17. VDOP
 
-		double pdop = 0.0;
+		double pdop = 0.0, hdop = 0.0, vdop = 0.0;
 		uint8_t fix_mode = 0;
 
-		// TODO : keep _fix_mode ? Better use GN fix mode from GGA
 		if (ptr && *(++ptr) != ',') { /* ignore 1. */ }
 		if (ptr && *(++ptr) != ',') { fix_mode = *(ptr++); }
 		/* ignore 3. to 14. */
@@ -379,8 +431,11 @@ GPSDriverEmlidReach::handleNmeaSentence()
 			if (ptr && *(++ptr) != ',') { }
 		}
 		if (ptr && *(++ptr) != ',') { pdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
-		if (ptr && *(++ptr) != ',') { _hdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
-		if (ptr && *(++ptr) != ',') { _vdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { hdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { vdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
+		_hdop = hdop;
+		_vdop = vdop;
 
 		EMLID_UNUSED(pdop);
 		EMLID_UNUSED(fix_mode);
@@ -449,7 +504,28 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Vector_Track_and_speed_over_Ground, NMEA_TYPE_LEN) == 0) {
 		// VTG
-		// ignore for now, not sure how to give it to caller
+		// $--VTG,x.x,T,x.x,M,x.x,N,x.x,K,m,*hh<CR><LF>
+		//        1   2 3   4 5   6 7   8 9
+		// 1. Track Degrees, course [0 - 360] to true north
+		// 2. T = True
+		// 3. Track Degrees, to magnetic north, to ignore
+		// 4. M = Magnetic
+		// 5. Speed Knots, use kmph !
+		// 6. N = Knots
+		// 7. Speed Kilometers Per Hour
+		// 8. K = Kilometers Per Hour
+		// 9. FAA mode indicator (NMEA 2.3 and later)
+
+		_course_deg = -1;
+		_speed_kmph = 0;
+
+		if (ptr && *(++ptr) != ',') { _course_deg = strtod(ptr, &end_ptr); ptr = end_ptr; }
+		/* ignore 2. to 6. */
+		for (int i=2; i<= 6; i++) {
+			if (ptr && *(++ptr) != ',') { }
+		}
+		if (ptr && *(++ptr) != ',') { _speed_kmph = strtod(ptr, &end_ptr); ptr = end_ptr; }
+
 
 	} else {
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
@@ -458,6 +534,29 @@ GPSDriverEmlidReach::handleNmeaSentence()
 	return update;
 }
 
+
+void
+GPSDriverEmlidReach::computeNedVelocity()
+{
+	if (_course_deg < 0) {
+		// no data to compute NED velocity from
+		_gps_position->vel_m_s = 0;
+		_gps_position->vel_n_m_s = 0;
+		_gps_position->vel_e_m_s = 0;
+		_gps_position->vel_d_m_s = 0;
+		_gps_position->cog_rad = 0;		/**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
+		_gps_position->vel_ned_valid = false;	/**< Flag to indicate if NED speed is valid */
+		return;
+	}
+
+	_gps_position->vel_m_s = _speed_kmph / 3.6;
+	_gps_position->vel_n_m_s = static_cast<float>(sin(_course_deg)) * _gps_position->vel_m_s;
+	_gps_position->vel_e_m_s = static_cast<float>(cos(_course_deg)) * _gps_position->vel_m_s;
+	_gps_position->vel_d_m_s = 0;
+	// in rad, -PI..PI */
+	_gps_position->cog_rad = _course_deg * 2 * GPS_PI / 360 - GPS_PI;
+	_gps_position->vel_ned_valid = true;
+}
 
 
 

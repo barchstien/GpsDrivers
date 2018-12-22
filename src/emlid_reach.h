@@ -37,6 +37,17 @@
  * @author Bastien Auneau <bastien.auneau@while-true.fr>
  */
 
+/***********************
+Questions:
+ 1. autodetect eml ? Look for X msg, if %success < 90%, fails ?
+    would work with any NMEA driver using same messages
+ 2. TODO 	struct satellite_info_s *_satellite_info {nullptr};
+ 3. TODO ? join GGA & GST on timestamp ? So far using FIFO
+ 4. gps_absolute_time() whereis it from ?
+ 5. TODO ? date set upon RMV msg ?
+************************/
+
+
 #pragma once
 
 #include "gps_helper.h"
@@ -51,7 +62,6 @@
 #define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
 #define NMEA_CHECKSUM_LEN		2
 
-// TODO ? join GGA & GST on timestamp ? So far using FIFO
 
 /**
  * Driver class for Emlid Reach
@@ -97,6 +107,9 @@ private:
 	/** Pointer to object provided by caller, ie GPSHelper */
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
+	unsigned _nmea_parse_err_cnt{0};
+	unsigned _nmea_cnt{0};
+
 
 	///// NMEA messages caches /////
 	/** HDOP from GSA message */
@@ -107,17 +120,27 @@ private:
 	double _eph{0.0};
 	/** epv from GST message */
 	double _epv{0.0};
+	/** epv from VTG message */
+	double _course_deg{-1};
+	/** epv from VTG message */
+	double _speed_kmph{0};
 
 
 	/** Set NMEA parser state when found $ start byte */
 	void nmeaParserRestart();
-	/** Feed NMEA parser with received bytes from serial */
+	/** Feed NMEA parser with received bytes from serial 
+	 * @return len of decoded message, 0 if not completed, -1 if error
+	 */
 	int parseChar(uint8_t b);
 
 	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper 
 	 *  @return true if gps_position has been updated
 	 */
 	bool handleNmeaSentence();
+
+	void computeNedVelocity();
+
+	bool testConnection();
 
 };
 
