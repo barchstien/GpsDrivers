@@ -45,6 +45,7 @@ Questions:
  3. TODO ? join GGA & GST on timestamp ? So far using FIFO
  4. gps_absolute_time() whereis it from ?
  5. TODO ? date set upon RMV msg ?
+ 6. ? why GPS_1 is off with 202 port, while on (autodetect) on 201 (default) port
 ************************/
 
 
@@ -107,6 +108,7 @@ private:
 	/** Pointer to object provided by caller, ie GPSHelper */
 	struct vehicle_gps_position_s *_gps_position {nullptr};
 
+	bool _testing_connection{false};
 	unsigned _nmea_parse_err_cnt{0};
 	unsigned _nmea_cnt{0};
 

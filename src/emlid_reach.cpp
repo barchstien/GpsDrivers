@@ -105,39 +105,28 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 		return -1;
 	}
 
-	// TODO check for different baudrates : 56000, 57600, 115200, 128000, 153600
-	// TODO others baudrates are too low or high
-#if 0
-	unsigned baud_allowed[]{4800, 9600, 14400, 19200, 28800, 38400, 56000, 57600, 115200, 128000, 153600, 230400, 256000, 460800};
+	unsigned baud_allowed[]{57600, 115200, 230400};
 	EMLID_UNUSED(baud_allowed);
-#endif
-	// disable auto select for now
-	if (baudrate == 0)
-		return -1;
-#if 0
+
 	for (unsigned i=0; i<sizeof(baud_allowed) / sizeof(baud_allowed[0]); i++) {
 		if (baudrate > 0 && baudrate != baud_allowed[i]) {
 			continue;
 		}
 		_nmea_parse_err_cnt = 0;
 		_nmea_cnt = 0;
-		GPS_INFO("EmlidReach: config with baudrate: %d", baudrate);
-		if (GPSHelper::setBaudrate(baudrate) != 0) {
+
+		if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
 			continue;
 		}
-		// TODO test connection (timeout, bad CRC)
+
 		if (! testConnection()) {
 			continue;
 		}
 
-		GPS_INFO("EmlidReach: config OK");
+		GPS_INFO("EmlidReach: config OK with baudrate: %d", baud_allowed[i]);
 		return 0;
 	}
-#else
-	if (GPSHelper::setBaudrate(baudrate) == 0) {
-		return 0;
-	}
-#endif
+
 	return -1;
 }
 
@@ -145,6 +134,8 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 bool
 GPSDriverEmlidReach::testConnection()
 {
+	_testing_connection = true;
+
 	unsigned timeout_cnt = 0;
 	while (timeout_cnt < AUTO_DETECT_MAX_TIMEOUT 
 		&& _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
@@ -154,8 +145,10 @@ GPSDriverEmlidReach::testConnection()
 			timeout_cnt ++;
 		}
 	}
-	GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
-	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT || _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
+	//GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
+
+	_testing_connection = false;
+	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
 }
 
 
@@ -170,7 +163,9 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 				_read_buff_ptr = _read_buff;
 			} else {
 				// timeout occured
-				//return 0;
+				if (_testing_connection) {
+					return 0;
+				}
 			}
 		} else {
 			// process data in buffer from previous read
