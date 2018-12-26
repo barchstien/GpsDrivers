@@ -90,10 +90,13 @@
 #define AUTO_DETECT_MAX_READ_NMEA	10
 
 
-GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position) :
+GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, 
+	struct vehicle_gps_position_s *gps_position, struct satellite_info_s *satellite_info) :
 	GPSHelper(callback, callback_user),
-	_gps_position(gps_position)
-{}
+	_gps_position(gps_position), _satellite_info(satellite_info)
+{
+	memset(_sat_info_array, 0, static_cast<int>(NMEA_TALKER::SIZE) * sizeof(satellite_info_s));
+}
 
 
 int
@@ -173,8 +176,9 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 				int ret = parseChar(*(_read_buff_ptr++));
 				if (ret > 0) {
 					_nmea_cnt ++;
-					if (handleNmeaSentence()) {
-						return 1;
+					ret = handleNmeaSentence();
+					if (ret > 0) {
+						return ret;
 					}
 				} else if (ret < 0) {
 					_nmea_parse_err_cnt ++;
@@ -277,13 +281,13 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 }
 
 
-bool
+int
 GPSDriverEmlidReach::handleNmeaSentence()
 {
 	// pass talker + type field, ie $--GGA
 	char *ptr = _nmea_buff + 6;
 	char *end_ptr;
-	bool update = false;
+	int ret = 1;
 
 	if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
@@ -314,7 +318,6 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		//
 		// $GNGGA,203735.20,5954.5926558,N,01046.5572464,E,1,07,1.0,6.317,M,38.953,M,0.0,
 
-		//int hour, min, sec, millisec;
 		double tmp_time = 0.0, lat = 0.0, lon = 0.0, alt = 0.0, geoidal_sep = 0.0;
 		char ns = '?', ew = '?', alt_unit = '?';
 		int sat_in_view = 0;
@@ -344,7 +347,6 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		if (ptr && *(++ptr) != ',') { geoidal_sep = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
 		EMLID_UNUSED(tmp_time);
-		EMLID_UNUSED(hdop);	// use hdop and vdop from GSA
 		EMLID_UNUSED(alt_unit);
 
 		// TODO where is this time coming from ?
@@ -371,8 +373,8 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		_gps_position->eph = _eph;
 		_gps_position->epv = _epv;
 
-		_gps_position->hdop = _hdop;
-		_gps_position->vdop = _vdop;
+		_gps_position->hdop = hdop;
+		_gps_position->vdop = 0;
 
 		// vehicle_gps_position_s::fix_type
 		//  0-1: no fix,
@@ -403,9 +405,10 @@ GPSDriverEmlidReach::handleNmeaSentence()
 #endif
 		computeNedVelocity();
 
+		// TODO
 //		_gps_position->c_variance_rad = 0.1f;
 
-		update = true;
+		ret = 1;
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		// Talker ids : GA|GL|GP
@@ -433,9 +436,8 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		if (ptr && *(++ptr) != ',') { hdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
 		if (ptr && *(++ptr) != ',') { vdop = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
-		_hdop = hdop;
-		_vdop = vdop;
-
+		EMLID_UNUSED(hdop);
+		EMLID_UNUSED(vdop);
 		EMLID_UNUSED(pdop);
 		EMLID_UNUSED(fix_mode);
 
@@ -479,8 +481,68 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Satellite_in_view, NMEA_TYPE_LEN) == 0) {
-		//GSV
-		// ignore for now, describe each satellite locked elevation, azimuth and SNR GA|GL|GP
+		// GSV
+		// Describe each satellite locked elevation, azimuth and SNR GA|GL|GP
+		// $--GSV,x,x,x,x,x,x,x,...*hh<CR><LF>
+		//        1 2 3 4 5 6 7
+		// 1. Total GSV messages in group
+		// 2. Index of this GSV message, starting at 1
+		// 3. Total number of sat in view
+		// 4. Satellite PRN number (Pseudo-Random Noise or Gold Codes)
+		// 5. Elevation in degrees [-90, 90]
+		// 6. Azimth in degrees to true north [000, 359]
+		// 7. SNR in dB [00, 99]
+
+		unsigned total_gsv_msg = 0, index_gsv_msg = 0, total_sat = 0;
+
+		unsigned talker_ind = 0;
+		if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GALILEO, NMEA_TALKER_LEN) == 0) {
+			talker_ind = static_cast<int>(NMEA_TALKER::GA);
+		} else if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GLONASS, NMEA_TALKER_LEN) == 0) {
+			talker_ind = static_cast<int>(NMEA_TALKER::GL);
+		} else if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GPS, NMEA_TALKER_LEN) == 0) {
+			talker_ind = static_cast<int>(NMEA_TALKER::GP);
+		} else {
+			// Talker id not supported, ignore message
+			return 0;
+		}
+
+		// extract data
+		if (ptr && *(++ptr) != ',') { total_gsv_msg = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { index_gsv_msg = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+		if (ptr && *(++ptr) != ',') { total_sat = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+
+		if (total_gsv_msg == 0) {
+			return 0;
+		}
+
+		if (index_gsv_msg == 1) {
+			// start of new group
+			memset(&_sat_info_array[talker_ind], 0, sizeof(satellite_info_s));
+		}
+
+		unsigned sat_cnt = (index_gsv_msg - 1) * 4;
+		for (unsigned i=0; i<4 && sat_cnt < total_sat; i++) {
+			unsigned id = 0, elevation = 0, azimuth = 0, snr = 0;
+
+			if (ptr && *(++ptr) != ',') { id = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+			if (ptr && *(++ptr) != ',') { elevation = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+			if (ptr && *(++ptr) != ',') { azimuth = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+			if (ptr && *(++ptr) != ',') { snr = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
+
+			_sat_info_array[talker_ind].svid[sat_cnt]		= id;
+			_sat_info_array[talker_ind].used[sat_cnt]		= snr > 0;
+			_sat_info_array[talker_ind].elevation[sat_cnt]  = elevation;
+			_sat_info_array[talker_ind].azimuth[sat_cnt]	= azimuth;
+			_sat_info_array[talker_ind].snr[sat_cnt]		= snr;
+			sat_cnt ++;
+		}
+
+		if (total_sat ==  sat_cnt){
+			// sequence ended
+			memcpy(_satellite_info, &_sat_info_array[talker_ind], sizeof(satellite_info_s));
+			ret = 2;
+		}
 
 	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
 		// $--RMC,hhmmss.ss,A,llll.ll,a,yyyyy.yy,a,x.x,x.x,xxxx,x.x,a,m,*hh<CR><LF>
@@ -531,7 +593,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
 	}
 
-	return update;
+	return ret;
 }
 
 

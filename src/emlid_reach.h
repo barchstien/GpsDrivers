@@ -72,7 +72,10 @@ Questions:
 class GPSDriverEmlidReach : public GPSHelper
 {
 public:
-	GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, struct vehicle_gps_position_s *gps_position);
+	GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, 
+		struct vehicle_gps_position_s *gps_position,
+		struct satellite_info_s *satellite_info
+	);
 	virtual ~GPSDriverEmlidReach() = default;
 
 	int receive(unsigned timeout) override;
@@ -84,6 +87,13 @@ private:
 		init = 0,
 		got_start_byte,		// $
 		got_checksum_byte	// *
+	};
+
+	enum class NMEA_TALKER {
+		GA = 0,
+		GL,
+		GP,
+		SIZE
 	};
 
 	/** NMEA parser state machine */
@@ -105,8 +115,10 @@ private:
 	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
 	unsigned _checksum_buff_len{0};
 
-	/** Pointer to object provided by caller, ie GPSHelper */
+	/** Pointer provided by caller, ie gps.cpp */
 	struct vehicle_gps_position_s *_gps_position {nullptr};
+	/** Pointer provided by caller, gps.cpp */
+	struct satellite_info_s *_satellite_info {nullptr};
 
 	bool _testing_connection{false};
 	unsigned _nmea_parse_err_cnt{0};
@@ -114,10 +126,6 @@ private:
 
 
 	///// NMEA messages caches /////
-	/** HDOP from GSA message */
-	double _hdop{0.0};
-	/** VDOP from GSA message */
-	double _vdop{0.0};
 	/** eph from GST message */
 	double _eph{0.0};
 	/** epv from GST message */
@@ -126,6 +134,10 @@ private:
 	double _course_deg{-1};
 	/** epv from VTG message */
 	double _speed_kmph{0};
+
+	/** Satellite info for GA, GL, GP (galileo, glonass, gps) */
+	struct satellite_info_s _sat_info_array[static_cast<int>(NMEA_TALKER::SIZE)];
+	//unsigned _sat_info_cnt[static_cast<int>(NMEA_TALKER::SIZE)];
 
 
 	/** Set NMEA parser state when found $ start byte */
@@ -138,7 +150,7 @@ private:
 	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper 
 	 *  @return true if gps_position has been updated
 	 */
-	bool handleNmeaSentence();
+	int handleNmeaSentence();
 
 	void computeNedVelocity();
 
