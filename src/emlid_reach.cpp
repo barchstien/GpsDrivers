@@ -127,6 +127,7 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 		}
 
 		GPS_INFO("EmlidReach: config OK with baudrate: %d", baud_allowed[i]);
+		baudrate = baud_allowed[i];
 		return 0;
 	}
 
@@ -587,7 +588,8 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		}
 		if (ptr && *(++ptr) != ',') { _speed_kmph = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
-		//GPS_INFO("EMLIDREACH: $--VTG _course_deg %f  _speed_kmph %f", _course_deg, _speed_kmph);
+		//if (_course_deg >= 0)
+		//	GPS_INFO("EMLIDREACH: $--VTG _course_deg %f  _speed_kmph %f", _course_deg, _speed_kmph);
 
 	} else {
 		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
@@ -612,11 +614,13 @@ GPSDriverEmlidReach::computeNedVelocity()
 	}
 
 	_gps_position->vel_m_s = _speed_kmph / 3.6;
-	_gps_position->vel_n_m_s = static_cast<float>(sin(_course_deg)) * _gps_position->vel_m_s;
-	_gps_position->vel_e_m_s = static_cast<float>(cos(_course_deg)) * _gps_position->vel_m_s;
+	// sin/cos goes clock wise, starting from east
+	// course goes anti clock wise, starting from north
+	_gps_position->vel_n_m_s = static_cast<float>(cosf(_course_deg * GPS_PI / 180.0)) * _gps_position->vel_m_s;
+	_gps_position->vel_e_m_s = static_cast<float>(sinf(_course_deg * GPS_PI / 180.0)) * _gps_position->vel_m_s;
 	_gps_position->vel_d_m_s = 0;
 	// in rad, -PI..PI */
-	_gps_position->cog_rad = _course_deg * 2 * GPS_PI / 360 - GPS_PI;
+	_gps_position->cog_rad = _course_deg * GPS_PI / 180.0 - GPS_PI;
 	_gps_position->vel_ned_valid = true;
 }
 
