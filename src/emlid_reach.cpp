@@ -214,8 +214,6 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
-		} else {
-			ret = -1;
 		}
 		break;
 
