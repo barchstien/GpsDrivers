@@ -83,7 +83,8 @@ private:
 	enum class NMEA_0183_State {
 		init = 0,
 		got_start_byte,		// $
-		got_checksum_byte	// *
+		got_checksum_byte,	// *
+		wait_for_LF
 	};
 
 	enum class NMEA_TALKER {

@@ -48,12 +48,13 @@
 
 #include <stdlib.h>
 
+//// NMEA
 #define NMEA_FIELD_MAX_LEN	14
 
-#define SYMBOL_START		0x24	// $
-#define SYMBOL_CHECKSUM		0x2a	// *
-#define SYMBOL_CR			0x0d	// <CR>
-#define SYMBOL_LF			0x0a	// <LF>
+#define NMEA_SYMBOL_START		0x24	// $
+#define NMEA_SYMBOL_CHECKSUM	0x2a	// *
+#define NMEA_SYMBOL_CR			0x0d	// <CR>
+#define NMEA_SYMBOL_LF			0x0a	// <LF>
 
 #define NMEA_TALKER_OFFSET	1
 #define NMEA_TALKER_LEN		2
@@ -81,13 +82,16 @@
 #define NMEA_recommended_minimum_data_for_gps	"RMC"	//< GN talker only
 #define NMEA_Vector_Track_and_speed_over_Ground	"VTG"	//< GN talker only
 
+//// ERB
+// 'R' Ox82 | 'E' Ox45 | ID | LENGTH (2B little endian) | payload | CHECKSUM (2B)
+
 #define EMLID_UNUSED(x) (void)x;
 
 #define GPS_PI		3.141592653589793238462643383280
 
-#define AUTO_DETECT_MAX_TIMEOUT		100	// large because small max timeout set in read() call
-#define AUTO_DETECT_MAX_PARSE_ERR	2
-#define AUTO_DETECT_MAX_READ_NMEA	10
+#define AUTO_DETECT_MAX_TIMEOUT		10	// if more detect failed AND
+#define AUTO_DETECT_MAX_PARSE_ERR	2	// if more detect failed AND
+#define AUTO_DETECT_MAX_READ_NMEA	10	// if more detect succeed
 
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, 
@@ -117,11 +121,12 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 		}
 		_nmea_parse_err_cnt = 0;
 		_nmea_cnt = 0;
+		_decode_state = NMEA_0183_State::init;
 
 		if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
 			continue;
 		}
-
+		GPS_INFO("EmlidReach: testConnection: %d", baud_allowed[i]);
 		if (! testConnection()) {
 			continue;
 		}
@@ -149,7 +154,7 @@ GPSDriverEmlidReach::testConnection()
 			timeout_cnt ++;
 		}
 	}
-	//GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
+	GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
 
 	_testing_connection = false;
 	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
@@ -165,6 +170,8 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			_read_buff_len = read(_read_buff, sizeof(_read_buff), timeout);
 			if (_read_buff_len > 0) {
 				_read_buff_ptr = _read_buff;
+				//GPS_INFO("ERB: %s", _read_buff);
+				//GPS_INFO("_nmea_parse_err_cnt: %d", _nmea_parse_err_cnt);
 			} else {
 				// timeout occured
 				if (_testing_connection) {
@@ -204,19 +211,21 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 	int ret = 0;
 	switch (_decode_state) {
 	case NMEA_0183_State::init:
-		if (b == SYMBOL_START) {
+		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
+		} else {
+			ret = -1;
 		}
 		break;
 
 	case NMEA_0183_State::got_start_byte:
-		if (b == SYMBOL_START) {
+		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 			ret = -1;
-		} else if (b == SYMBOL_CHECKSUM) {
+		} else if (b == NMEA_SYMBOL_CHECKSUM) {
 			_decode_state = NMEA_0183_State::got_checksum_byte;
 			_checksum_buff_len = 0;
 		} else if (_nmea_buff_len >= NMEA_SENTENCE_MAX_LEN) {
@@ -229,12 +238,12 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 		break;
 
 	case NMEA_0183_State::got_checksum_byte:
-		if (b == SYMBOL_START) {
+		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
 			_nmea_buff[_nmea_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 			ret = -1;
-		} else if (b == SYMBOL_CR || b == SYMBOL_LF) {
+		} else if (b == NMEA_SYMBOL_CR) {
 			// compute expected checksum
 			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
 			int cs = 0;
@@ -258,14 +267,7 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 				_decode_state = NMEA_0183_State::init;
 				ret = -1;
 			} else {
-				//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _nmea_buff_len, _nmea_buff);
-				// return length of formed buffer and re-init state machine for next sentence
-				// null terminate in case it's printed later on, while debug/fixing
-				// safe length-wise because NMEA_SENTENCE_MAX_LEN could contain checksum, CR and LF
-				_nmea_buff[_nmea_buff_len] = '\0';
-				ret = _nmea_buff_len;
-				_decode_state = NMEA_0183_State::init;
-				
+				_decode_state = NMEA_0183_State::wait_for_LF;
 			}
 		} else if (_checksum_buff_len >= NMEA_CHECKSUM_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message checksum overflow");
@@ -276,6 +278,21 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 		}
 
 		break;
+
+	case NMEA_0183_State::wait_for_LF:
+		if (b == NMEA_SYMBOL_LF) {
+			//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _nmea_buff_len, _nmea_buff);
+			// return length of formed buffer and re-init state machine for next sentence
+			// null terminate in case it's printed later on, while debug/fixing
+			// safe length-wise because NMEA_SENTENCE_MAX_LEN could contain checksum, CR and LF
+			_nmea_buff[_nmea_buff_len] = '\0';
+			ret = _nmea_buff_len;
+			_decode_state = NMEA_0183_State::init;
+		} else {
+			ret = -1;
+		}
+		break;
+
 	}
 
 	return ret;
