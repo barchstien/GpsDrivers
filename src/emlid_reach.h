@@ -39,11 +39,10 @@
 
 /***********************
 Questions:
- 3. TODO ? join GGA & GST on timestamp ? So far using FIFO
- 4. gps_absolute_time() whereis it from ?
- 5. TODO ? date set upon RMV msg ?
- 6. ? why GPS_1 is off with 202 port, while on (autodetect) on 201 (default) port
-	|--> setting to 202 doesn't work at all
+ 1. TODO support ERB https://files.emlid.com/ERB.pdf
+ 3. TODO time_utc_usec
+ 4. gps_absolute_time() whereis it from ? <--- usec since close to start, always counting up
+ 5. TODO ? date set upon RMV msg ?... not sure coz want to do ERB now...
 ************************/
 
 

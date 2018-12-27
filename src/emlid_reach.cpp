@@ -288,7 +288,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 	// pass talker + type field, ie $--GGA
 	char *ptr = _nmea_buff + 6;
 	char *end_ptr;
-	int ret = 1;
+	int ret = 0;
 
 	if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
@@ -396,18 +396,8 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 		_gps_position->satellites_used = sat_in_view;
 
-#if 0
-		_gps_position->vel_m_s = 0;		/**< GPS ground speed (m/s) */
-		_gps_position->vel_n_m_s = 0;	/**< GPS North velocity (m/s) */
-		_gps_position->vel_e_m_s = 0;	/**< GPS East velocity (m/s) */
-		_gps_position->vel_d_m_s = 0;	/**< GPS Down velocity (m/s) */
-		_gps_position->cog_rad = 0;		/**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
-		_gps_position->vel_ned_valid = false;	/**< Flag to indicate if NED speed is valid */
-#endif
+		// emlid forum says to calculate from last GPS position with low filter, for NMEA
 		computeNedVelocity();
-
-		// TODO
-//		_gps_position->c_variance_rad = 0.1f;
 
 		ret = 1;
 
@@ -628,6 +618,7 @@ GPSDriverEmlidReach::computeNedVelocity()
 	// in rad, -PI..PI */
 	_gps_position->cog_rad = _course_deg * GPS_PI / 180.0 - GPS_PI;
 	_gps_position->vel_ned_valid = true;
+	_rate_count_vel++;
 }
 
 
