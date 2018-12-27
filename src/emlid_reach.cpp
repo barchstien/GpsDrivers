@@ -513,7 +513,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		if (ptr && *(++ptr) != ',') { index_gsv_msg = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 		if (ptr && *(++ptr) != ',') { total_sat = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 
-		if (total_gsv_msg == 0) {
+		if (total_gsv_msg == 0 || index_gsv_msg == 0 || total_sat== 0) {
 			return 0;
 		}
 
@@ -539,8 +539,14 @@ GPSDriverEmlidReach::handleNmeaSentence()
 			sat_cnt ++;
 		}
 
-		if (total_sat ==  sat_cnt){
+		if (total_sat == sat_cnt && _satellite_info){
 			// sequence ended
+			_sat_info_array[talker_ind].count = sat_cnt;
+			if (sat_cnt > satellite_info_s::SAT_INFO_MAX_SATELLITES) {
+				_sat_info_array[talker_ind].count = satellite_info_s::SAT_INFO_MAX_SATELLITES;
+			}
+			_sat_info_array[talker_ind].timestamp = gps_absolute_time();
+
 			memcpy(_satellite_info, &_sat_info_array[talker_ind], sizeof(satellite_info_s));
 			ret = 2;
 		}
