@@ -228,26 +228,28 @@ int
 GPSDriverEmlidReach::erbParseChar(uint8_t b)
 {
 	int ret = 0;
-	//GPS_INFO(" ERB PARSE: %02x", b);
+
+	if (_decode_state.erb != ERB_State::init && b == ERB_SYNC_1) {
+		// got SYNC byte when not expected, restart parser
+		_buff_len = 0;
+		_buff[_buff_len ++] = b;
+		_decode_state.erb = ERB_State::got_sync_1;
+		_parse_err_cnt ++;
+		return 0;
+	}
+
 	switch (_decode_state.erb) {
 	case ERB_State::init:
 		if (b == ERB_SYNC_1) {
 			_buff_len = 0;
 			_buff[_buff_len ++] = b;
 			_decode_state.erb = ERB_State::got_sync_1;
-			//GPS_INFO(" ERB GOT SYNC 1");
 		}
 		break;
 	case ERB_State::got_sync_1:
-		if (b == ERB_SYNC_1) {
-			_buff_len = 0;
-			_buff[_buff_len ++] = b;
-			_decode_state.erb = ERB_State::got_sync_1;
-			_parse_err_cnt ++;
-		} else if (b == ERB_SYNC_2) {
+		if (b == ERB_SYNC_2) {
 			_buff[_buff_len ++] = b;
 			_decode_state.erb = ERB_State::got_sync_2;
-			//GPS_INFO(" ERB GOT SYNC 2");
 		} else {
 			_decode_state.erb = ERB_State::init;
 			_parse_err_cnt ++;
@@ -256,31 +258,62 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 	case ERB_State::got_sync_2:
 		if (b >= ERB_ID_VERSION && b <= ERB_ID_RTK) {
 			_buff[_buff_len ++] = b;
-			// debug TODO
-			//_decode_state.erb = ERB_State::got_id;
-			ret = 1;
-			_decode_state.erb = ERB_State::init;
-			//GPS_INFO(" ERB GOT Header %s", _buff);
+			_decode_state.erb = ERB_State::got_id;
+			if (b == ERB_ID_SPACE_INFO || b == ERB_ID_RTK) {
+				//ignore those
+				_decode_state.erb = ERB_State::init;
+			}
 		} else {
 			_decode_state.erb = ERB_State::init;
 			_parse_err_cnt ++;
-			GPS_INFO(" ERB GOT Err on %02x", b);
 		}
 		break;
 	case ERB_State::got_id:
-		
+		_buff[_buff_len ++] = b;
+		_decode_state.erb = ERB_State::got_len_1;
+		_erb_payload_len = b;
 		break;
 	case ERB_State::got_len_1:
-		
+		_buff[_buff_len ++] = b;
+		_decode_state.erb = ERB_State::got_len_2;
+		_erb_payload_len = (b << 8) | _erb_payload_len;
+		GPS_INFO("EMLIDREACH: ERB payload len: %d", _erb_payload_len);
 		break;
 	case ERB_State::got_len_2:
-		
+		if (_buff_len >= SENTENCE_MAX_LEN) {
+			_decode_state.erb = ERB_State::init;
+			_parse_err_cnt ++;
+			GPS_INFO("EMLIDREACH: ERB payload overflow");
+		} else {
+			_buff[_buff_len ++] = b;
+		}
+
+		if (_buff_len >= _erb_payload_len + static_cast<unsigned>(ERB_HEADER_LEN)) {
+			_decode_state.erb = ERB_State::got_payload;
+		}
 		break;
 	case ERB_State::got_payload:
-		
+		_checksum_buff_len = 0;
+		_checksum_buff[_checksum_buff_len ++] = b;
+		_decode_state.erb = ERB_State::got_CK_A;
 		break;
 	case ERB_State::got_CK_A:
-		
+		_checksum_buff[_checksum_buff_len ++] = b;
+
+		uint8_t cka = 0, ckb = 0;
+		for (unsigned i=2; i<_erb_payload_len + static_cast<unsigned>(ERB_HEADER_LEN); i++) {
+			cka += _buff[i];
+			ckb += cka;
+		}
+		if (cka == _checksum_buff[0] && ckb == _checksum_buff[1]) {
+			GPS_INFO("EMLIDREACH: ERB checksum OK");
+			ret = 1;
+		} else {
+			GPS_INFO("EMLIDREACH: ERB checksum NNNOK");
+			ret = 0;
+			_parse_err_cnt ++;
+		}
+		_decode_state.erb = ERB_State::init;
 		break;
 	}
 

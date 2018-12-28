@@ -61,10 +61,12 @@ Questions:
 #define NMEA_SENTENCE_MAX_LEN  82  // includes '$',<CR> and <LF> 
 #define NMEA_CHECKSUM_LEN      2
 
+// TODO remove sync bytes from buff, coz not used by checksum
+#define ERB_HEADER_LEN       5
 // Not using ERB_ID_SPACE_INFO
 //#define ERB_SENTENCE_MAX_LEN   (5+20*satellite_info_s::SAT_INFO_MAX_SATELLITES)
-#define ERB_SENTENCE_MAX_LEN   44
-#define ERB_CHECKSUM_LEN       2
+#define ERB_SENTENCE_MAX_LEN 44 + ERB_HEADER_LEN
+#define ERB_CHECKSUM_LEN     2
 
 #define MAX_CONST(a, b) ((a>b) ? a : b)
 
@@ -161,6 +163,8 @@ private:
 	unsigned _nmea_cnt{0};
 	unsigned _erb_parse_err_cnt{0};
 	unsigned _erb_cnt{0};*/
+
+	uint16_t _erb_payload_len{0};
 
 
 	///// NMEA messages caches /////
