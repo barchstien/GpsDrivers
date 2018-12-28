@@ -49,15 +49,13 @@
 #include <stdlib.h>
 
 //// NMEA
-#define NMEA_FIELD_MAX_LEN	14
+#define NMEA_SYMBOL_START    0x24 // $
+#define NMEA_SYMBOL_CHECKSUM 0x2a // *
+#define NMEA_SYMBOL_CR       0x0d // <CR>
+#define NMEA_SYMBOL_LF       0x0a // <LF>
 
-#define NMEA_SYMBOL_START		0x24	// $
-#define NMEA_SYMBOL_CHECKSUM	0x2a	// *
-#define NMEA_SYMBOL_CR			0x0d	// <CR>
-#define NMEA_SYMBOL_LF			0x0a	// <LF>
-
-#define NMEA_TALKER_OFFSET	1
-#define NMEA_TALKER_LEN		2
+#define NMEA_TALKER_OFFSET 1
+#define NMEA_TALKER_LEN    2
 
 // Emlid reach emits messages :
 //   GAGSA, GAGSV
@@ -66,32 +64,45 @@
 //   GNGGA, GNGST, GNRMC, GNVTG
 
 // NMEA talker's id
-#define NMEA_TALKER_GALILEO		"GA"
-#define NMEA_TALKER_GLONASS		"GL"
-#define NMEA_TALKER_GNSS		"GN"	// Mixed GPS and GLONASS data, according to IEIC 61162-1
-#define NMEA_TALKER_GPS			"GP"
+#define NMEA_TALKER_GALILEO "GA"
+#define NMEA_TALKER_GLONASS "GL"
+#define NMEA_TALKER_GNSS    "GN"    // Mixed GPS and GLONASS data, according to IEIC 61162-1
+#define NMEA_TALKER_GPS     "GP"
 
-#define NMEA_TYPE_OFFSET	3
-#define NMEA_TYPE_LEN		3
+#define NMEA_TYPE_OFFSET 3
+#define NMEA_TYPE_LEN    3
 
 // NMEA sentence types
-#define NMEA_Fix_information					"GGA"	//< GN talker only
-#define NMEA_Overall_Satellite_data				"GSA"	//< GA|GL|GP
-#define NMEA_GPS_Pseudorange_Noise_Statistics	"GST"	//< GN talker only
-#define NMEA_Satellite_in_view					"GSV"	//< GA|GL|GP
-#define NMEA_recommended_minimum_data_for_gps	"RMC"	//< GN talker only
-#define NMEA_Vector_Track_and_speed_over_Ground	"VTG"	//< GN talker only
+#define NMEA_Fix_information                    "GGA" //< GN talker only
+#define NMEA_Overall_Satellite_data             "GSA" //< GA|GL|GP
+#define NMEA_GPS_Pseudorange_Noise_Statistics   "GST" //< GN talker only
+#define NMEA_Satellite_in_view                  "GSV" //< GA|GL|GP
+#define NMEA_recommended_minimum_data_for_gps   "RMC" //< GN talker only
+#define NMEA_Vector_Track_and_speed_over_Ground "VTG" //< GN talker only
 
 //// ERB
 // 'R' Ox82 | 'E' Ox45 | ID | LENGTH (2B little endian) | payload | CHECKSUM (2B)
+#define ERB_SYNC_1 0x45 // E
+#define ERB_SYNC_2 0x52 // R
+
+#define ERB_ID_VERSION         0x01
+#define ERB_ID_GEODIC_POSITION 0x02
+#define ERB_ID_NAV_STATUS      0x03
+#define ERB_ID_DOPS            0x04
+#define ERB_ID_VELOCITY_NED    0x05
+#define ERB_ID_SPACE_INFO      0x06 // not used, reduces stack usage
+#define ERB_ID_RTK             0x07 // RTK, TODO really ?
+
 
 #define EMLID_UNUSED(x) (void)x;
 
-#define GPS_PI		3.141592653589793238462643383280
+#define GPS_PI 3.141592653589793238462643383280
 
-#define AUTO_DETECT_MAX_TIMEOUT		10	// if more detect failed AND
-#define AUTO_DETECT_MAX_PARSE_ERR	2	// if more detect failed AND
-#define AUTO_DETECT_MAX_READ_NMEA	10	// if more detect succeed
+#define AUTO_DETECT_MAX_TIMEOUT       10 // if more detect failed AND
+#define AUTO_DETECT_MAX_PARSE_ERR     2  // if more detect failed AND
+#define AUTO_DETECT_MAX_READ_SENTENCE 10 // if more detect succeed
+
+#define TYPE_STR(t) ((t == PARSER_TYPE::NMEA) ? "NMEA" : "ERB")
 
 
 GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, 
@@ -113,27 +124,31 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 	}
 
 	unsigned baud_allowed[]{57600, 115200, 230400};
-	EMLID_UNUSED(baud_allowed);
+	PARSER_TYPE types[]{PARSER_TYPE::NMEA, PARSER_TYPE::ERB};
 
-	for (unsigned i=0; i<sizeof(baud_allowed) / sizeof(baud_allowed[0]); i++) {
-		if (baudrate > 0 && baudrate != baud_allowed[i]) {
-			continue;
-		}
-		_nmea_parse_err_cnt = 0;
-		_nmea_cnt = 0;
-		_decode_state = NMEA_0183_State::init;
+	for (unsigned k=0; k<sizeof(types) / sizeof(types[0]); k++) {
+		_parser_type = types[k];
+		for (unsigned i=0; i<sizeof(baud_allowed) / sizeof(baud_allowed[0]); i++) {
+			if (baudrate > 0 && baudrate != baud_allowed[i]) {
+				continue;
+			}
+			_parse_err_cnt = 0;
+			_sentence_cnt = 0;
+			_decode_state.nmea = NMEA_0183_State::init;
+			_decode_state.erb  = ERB_State::init;
 
-		if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
-			continue;
-		}
-		GPS_INFO("EmlidReach: testConnection: %d", baud_allowed[i]);
-		if (! testConnection()) {
-			continue;
-		}
+			if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
+				continue;
+			}
+			GPS_INFO("EmlidReach: testConnection: %d type: %s", baud_allowed[i], TYPE_STR(_parser_type));
+			if (! testConnection()) {
+				continue;
+			}
 
-		GPS_INFO("EmlidReach: config OK with baudrate: %d", baud_allowed[i]);
-		baudrate = baud_allowed[i];
-		return 0;
+			GPS_INFO("EmlidReach: config OK with baudrate: %d type: %s", baud_allowed[i], TYPE_STR(_parser_type));
+			baudrate = baud_allowed[i];
+			return 0;
+		}
 	}
 
 	return -1;
@@ -147,17 +162,17 @@ GPSDriverEmlidReach::testConnection()
 
 	unsigned timeout_cnt = 0;
 	while (timeout_cnt < AUTO_DETECT_MAX_TIMEOUT 
-		&& _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
-		&& _nmea_cnt < AUTO_DETECT_MAX_READ_NMEA)
+		&& _parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
+		&& _sentence_cnt < AUTO_DETECT_MAX_READ_SENTENCE)
 	{
 		if (receive(50000) == 0) { // timeout larger than what defined in read() are truncated
 			timeout_cnt ++;
 		}
 	}
-	GPS_WARN("+++++     _nmea_cnt %d  timeout_cnt %d  _nmea_parse_err_cnt %d", _nmea_cnt, timeout_cnt, _nmea_parse_err_cnt);
+	GPS_WARN("+++++     _sentence_cnt %d  timeout_cnt %d  _parse_err_cnt %d", _sentence_cnt, timeout_cnt, _parse_err_cnt);
 
 	_testing_connection = false;
-	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _nmea_parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
+	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
 }
 
 
@@ -171,7 +186,7 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			if (_read_buff_len > 0) {
 				_read_buff_ptr = _read_buff;
 				//GPS_INFO("ERB: %s", _read_buff);
-				//GPS_INFO("_nmea_parse_err_cnt: %d", _nmea_parse_err_cnt);
+				//GPS_INFO("_parse_err_cnt: %d", _parse_err_cnt);
 			} else {
 				// timeout occured
 				if (_testing_connection) {
@@ -181,15 +196,24 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 		} else {
 			// process data in buffer from previous read
 			while (_read_buff_ptr < _read_buff + _read_buff_len) {
-				int ret = parseChar(*(_read_buff_ptr++));
+				int ret = 0;
+				if (_parser_type == PARSER_TYPE::NMEA) {
+					ret = nmeaParseChar(*(_read_buff_ptr++));
+				} else {
+					ret = erbParseChar(*(_read_buff_ptr++));
+				}
 				if (ret > 0) {
-					_nmea_cnt ++;
-					ret = handleNmeaSentence();
+					_sentence_cnt ++;
+					if (_parser_type == PARSER_TYPE::NMEA) {
+						ret = handleNmeaSentence();
+					} else {
+						ret = handleErbSentence();
+					}
 					if (ret > 0) {
 						return ret;
 					}
 				} else if (ret < 0) {
-					_nmea_parse_err_cnt ++;
+					_parse_err_cnt ++;
 				}
 			}
 		}
@@ -197,56 +221,139 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 }
 
 
+
+//// ERB
+
+int
+GPSDriverEmlidReach::erbParseChar(uint8_t b)
+{
+	int ret = 0;
+	//GPS_INFO(" ERB PARSE: %02x", b);
+	switch (_decode_state.erb) {
+	case ERB_State::init:
+		if (b == ERB_SYNC_1) {
+			_buff_len = 0;
+			_buff[_buff_len ++] = b;
+			_decode_state.erb = ERB_State::got_sync_1;
+			//GPS_INFO(" ERB GOT SYNC 1");
+		}
+		break;
+	case ERB_State::got_sync_1:
+		if (b == ERB_SYNC_1) {
+			_buff_len = 0;
+			_buff[_buff_len ++] = b;
+			_decode_state.erb = ERB_State::got_sync_1;
+			_parse_err_cnt ++;
+		} else if (b == ERB_SYNC_2) {
+			_buff[_buff_len ++] = b;
+			_decode_state.erb = ERB_State::got_sync_2;
+			//GPS_INFO(" ERB GOT SYNC 2");
+		} else {
+			_decode_state.erb = ERB_State::init;
+			_parse_err_cnt ++;
+		}
+		break;
+	case ERB_State::got_sync_2:
+		if (b >= ERB_ID_VERSION && b <= ERB_ID_RTK) {
+			_buff[_buff_len ++] = b;
+			// debug TODO
+			//_decode_state.erb = ERB_State::got_id;
+			ret = 1;
+			_decode_state.erb = ERB_State::init;
+			//GPS_INFO(" ERB GOT Header %s", _buff);
+		} else {
+			_decode_state.erb = ERB_State::init;
+			_parse_err_cnt ++;
+			GPS_INFO(" ERB GOT Err on %02x", b);
+		}
+		break;
+	case ERB_State::got_id:
+		
+		break;
+	case ERB_State::got_len_1:
+		
+		break;
+	case ERB_State::got_len_2:
+		
+		break;
+	case ERB_State::got_payload:
+		
+		break;
+	case ERB_State::got_CK_A:
+		
+		break;
+	}
+
+	return ret;
+}
+
+int
+GPSDriverEmlidReach::handleErbSentence()
+{
+//	char *ptr = _buff + 6;
+//	char *end_ptr;
+	int ret = 0;
+
+	// debug tests
+	if (_testing_connection)
+		ret = 1;
+
+	return ret;
+}
+
+
+//// NMEA
+
 void
 GPSDriverEmlidReach::nmeaParserRestart()
 {
-	_decode_state = NMEA_0183_State::got_start_byte;
-	_nmea_buff_len = 0;
+	_decode_state.nmea = NMEA_0183_State::got_start_byte;
+	_buff_len = 0;
 }
 
 
 int
-GPSDriverEmlidReach::parseChar(uint8_t b)
+GPSDriverEmlidReach::nmeaParseChar(uint8_t b)
 {
 	int ret = 0;
-	switch (_decode_state) {
+	switch (_decode_state.nmea) {
 	case NMEA_0183_State::init:
 		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
-			_nmea_buff[_nmea_buff_len ++] = b;
+			_buff[_buff_len ++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_start_byte:
 		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
-			_nmea_buff[_nmea_buff_len ++] = b;
+			_buff[_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 			ret = -1;
 		} else if (b == NMEA_SYMBOL_CHECKSUM) {
-			_decode_state = NMEA_0183_State::got_checksum_byte;
+			_decode_state.nmea = NMEA_0183_State::got_checksum_byte;
 			_checksum_buff_len = 0;
-		} else if (_nmea_buff_len >= NMEA_SENTENCE_MAX_LEN) {
+		} else if (_buff_len >= SENTENCE_MAX_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message overflow");
-			_decode_state = NMEA_0183_State::init;
+			_decode_state.nmea = NMEA_0183_State::init;
 			ret = -1;
 		} else {
-			_nmea_buff[_nmea_buff_len++] = b;
+			_buff[_buff_len++] = b;
 		}
 		break;
 
 	case NMEA_0183_State::got_checksum_byte:
 		if (b == NMEA_SYMBOL_START) {
 			nmeaParserRestart();
-			_nmea_buff[_nmea_buff_len ++] = b;
+			_buff[_buff_len ++] = b;
 			GPS_WARN("EMLIDREACH: NMEA message truncated");
 			ret = -1;
 		} else if (b == NMEA_SYMBOL_CR) {
 			// compute expected checksum
 			// https://en.wikipedia.org/wiki/NMEA_0183#C_implementation_of_checksum_generation
 			int cs = 0;
-			for (unsigned i=1; i<_nmea_buff_len; i++){
-				cs ^= _nmea_buff[i];
+			for (unsigned i=1; i<_buff_len; i++){
+				cs ^= _buff[i];
 			}
 
 			// convert read checksum to int
@@ -255,21 +362,21 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 			if (read_cs == 0) {
 				if (errno == ERANGE) {
 					GPS_WARN("EMLIDREACH: NMEA checksum extraction failed: %s", _checksum_buff);
-					_decode_state = NMEA_0183_State::init;
+					_decode_state.nmea = NMEA_0183_State::init;
 					ret = -1;
 				}
 			}
 
 			if (cs != read_cs){
-				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _nmea_buff);
-				_decode_state = NMEA_0183_State::init;
+				GPS_WARN("EMLIDREACH: NMEA checksum failed, expectd %02x, got %02x \n %s", cs, read_cs, _buff);
+				_decode_state.nmea = NMEA_0183_State::init;
 				ret = -1;
 			} else {
-				_decode_state = NMEA_0183_State::wait_for_LF;
+				_decode_state.nmea = NMEA_0183_State::wait_for_LF;
 			}
-		} else if (_checksum_buff_len >= NMEA_CHECKSUM_LEN) {
+		} else if (_checksum_buff_len >= CHECKSUM_LEN) {
 			GPS_WARN("EMLIDREACH: NMEA message checksum overflow");
-			_decode_state = NMEA_0183_State::init;
+			_decode_state.nmea = NMEA_0183_State::init;
 			ret = -1;
 		} else {
 			_checksum_buff[_checksum_buff_len++] = b;
@@ -279,13 +386,13 @@ GPSDriverEmlidReach::parseChar(uint8_t b)
 
 	case NMEA_0183_State::wait_for_LF:
 		if (b == NMEA_SYMBOL_LF) {
-			//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _nmea_buff_len, _nmea_buff);
+			//GPS_INFO("EMLIDREACH: NMEA sentence completed len:%d \n %s", _buff_len, _buff);
 			// return length of formed buffer and re-init state machine for next sentence
 			// null terminate in case it's printed later on, while debug/fixing
-			// safe length-wise because NMEA_SENTENCE_MAX_LEN could contain checksum, CR and LF
-			_nmea_buff[_nmea_buff_len] = '\0';
-			ret = _nmea_buff_len;
-			_decode_state = NMEA_0183_State::init;
+			// safe length-wise because SENTENCE_MAX_LEN could contain checksum, CR and LF
+			_buff[_buff_len] = '\0';
+			ret = _buff_len;
+			_decode_state.nmea = NMEA_0183_State::init;
 		} else {
 			ret = -1;
 		}
@@ -301,11 +408,11 @@ int
 GPSDriverEmlidReach::handleNmeaSentence()
 {
 	// pass talker + type field, ie $--GGA
-	char *ptr = _nmea_buff + 6;
+	char *ptr = _buff + 6;
 	char *end_ptr;
 	int ret = 0;
 
-	if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
+	if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_Fix_information, NMEA_TYPE_LEN) == 0) {
 		// $--GGA,hhmmss.ss,llll.ll,a,yyyyy.yy,a,x,xx,x.x,x.x,M,x.x,M,x.x,xxxx*hh<CR><LF>
 		//        1         2       3 4        5 6 7  8   9   10 11 12 13 14
 		// 1. UTC time
@@ -402,12 +509,12 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		//  8: Extrapolated. Some applications will not use the value of this field unless it is at least two, so always correctly fill in the fix.
 
 		uint8_t fix_mode = sat_in_view >= 4 ? 3 : 2; // 3d vs 2d fix
-		if (fix_quality == 0) 		{ _gps_position->fix_type = 0; }
-		else if (fix_quality == 1)	{ _gps_position->fix_type = fix_mode; }
-		else if (fix_quality <= 3)	{ _gps_position->fix_type = 4; }		// differential & PPS
-		else if (fix_quality == 4)	{ _gps_position->fix_type = 6; }		// RTK fixed
-		else if (fix_quality == 5)	{ _gps_position->fix_type = 5; }		// RTF float
-		else 						{ _gps_position->fix_type = 0; }
+		if (fix_quality == 0)      { _gps_position->fix_type = 0; }
+		else if (fix_quality == 1) { _gps_position->fix_type = fix_mode; }
+		else if (fix_quality <= 3) { _gps_position->fix_type = 4; } // differential & PPS
+		else if (fix_quality == 4) { _gps_position->fix_type = 6; } // RTK fixed
+		else if (fix_quality == 5) { _gps_position->fix_type = 5; } // RTF float
+		else                       { _gps_position->fix_type = 0; }
 
 		_gps_position->satellites_used = sat_in_view;
 
@@ -416,7 +523,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 
 		ret = 1;
 
-	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_Overall_Satellite_data, NMEA_TYPE_LEN) == 0) {
 		// Talker ids : GA|GL|GP
 		// $--GSA,a,a,x,x,x,x,x,x,x,x,x,x,x,x,x,x,x.x,x.x,x.x*hh<CR><LF>
 		//        1 2 3                         14 15 16  17
@@ -448,7 +555,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		EMLID_UNUSED(fix_mode);
 
 
-	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_GPS_Pseudorange_Noise_Statistics, NMEA_TYPE_LEN) == 0) {
 		// $--GST,hhmmss.ss,x,x,x,x,x,x,x,*hh<CR><LF>
 		//        1         2 3 4 5 6 7 8
 		// 1. UTC time
@@ -486,7 +593,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		// TODO _gps_position->s_variance_m_s = 0;
 
 
-	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Satellite_in_view, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_Satellite_in_view, NMEA_TYPE_LEN) == 0) {
 		// GSV
 		// Describe each satellite locked elevation, azimuth and SNR GA|GL|GP
 		// $--GSV,x,x,x,x,x,x,x,...*hh<CR><LF>
@@ -502,11 +609,11 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		unsigned total_gsv_msg = 0, index_gsv_msg = 0, total_sat = 0;
 
 		unsigned talker_ind = 0;
-		if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GALILEO, NMEA_TALKER_LEN) == 0) {
+		if (strncmp(_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GALILEO, NMEA_TALKER_LEN) == 0) {
 			talker_ind = static_cast<int>(NMEA_TALKER::GA);
-		} else if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GLONASS, NMEA_TALKER_LEN) == 0) {
+		} else if (strncmp(_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GLONASS, NMEA_TALKER_LEN) == 0) {
 			talker_ind = static_cast<int>(NMEA_TALKER::GL);
-		} else if (strncmp(_nmea_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GPS, NMEA_TALKER_LEN) == 0) {
+		} else if (strncmp(_buff + NMEA_TALKER_OFFSET, NMEA_TALKER_GPS, NMEA_TALKER_LEN) == 0) {
 			talker_ind = static_cast<int>(NMEA_TALKER::GP);
 		} else {
 			// Talker id not supported, ignore message
@@ -536,11 +643,11 @@ GPSDriverEmlidReach::handleNmeaSentence()
 			if (ptr && *(++ptr) != ',') { azimuth = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 			if (ptr && *(++ptr) != ',') { snr = strtol(ptr, &end_ptr, 10); ptr = end_ptr; }
 
-			_sat_info_array[talker_ind].svid[sat_cnt]		= id;
-			_sat_info_array[talker_ind].used[sat_cnt]		= snr > 0;
-			_sat_info_array[talker_ind].elevation[sat_cnt]  = elevation;
-			_sat_info_array[talker_ind].azimuth[sat_cnt]	= azimuth;
-			_sat_info_array[talker_ind].snr[sat_cnt]		= snr;
+			_sat_info_array[talker_ind].svid[sat_cnt]      = id;
+			_sat_info_array[talker_ind].used[sat_cnt]      = snr > 0;
+			_sat_info_array[talker_ind].elevation[sat_cnt] = elevation;
+			_sat_info_array[talker_ind].azimuth[sat_cnt]   = azimuth;
+			_sat_info_array[talker_ind].snr[sat_cnt]       = snr;
 			sat_cnt ++;
 		}
 
@@ -556,7 +663,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 			ret = 2;
 		}
 
-	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_recommended_minimum_data_for_gps, NMEA_TYPE_LEN) == 0) {
 		// $--RMC,hhmmss.ss,A,llll.ll,a,yyyyy.yy,a,x.x,x.x,xxxx,x.x,a,m,*hh<CR><LF>
 		//        1         2 3       4 5        6 7   8   9    10  11 12
 		// 1. UTC Time
@@ -575,7 +682,7 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		// TODO Date here !
 
 
-	} else if (strncmp(_nmea_buff + NMEA_TYPE_OFFSET, NMEA_Vector_Track_and_speed_over_Ground, NMEA_TYPE_LEN) == 0) {
+	} else if (strncmp(_buff + NMEA_TYPE_OFFSET, NMEA_Vector_Track_and_speed_over_Ground, NMEA_TYPE_LEN) == 0) {
 		// VTG
 		// $--VTG,x.x,T,x.x,M,x.x,N,x.x,K,m,*hh<CR><LF>
 		//        1   2 3   4 5   6 7   8 9
@@ -600,10 +707,10 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		if (ptr && *(++ptr) != ',') { _speed_kmph = strtod(ptr, &end_ptr); ptr = end_ptr; }
 
 		//if (_course_deg >= 0)
-		//	GPS_INFO("EMLIDREACH: $--VTG _course_deg %f  _speed_kmph %f", _course_deg, _speed_kmph);
+		// GPS_INFO("EMLIDREACH: $--VTG _course_deg %f  _speed_kmph %f", _course_deg, _speed_kmph);
 
 	} else {
-		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _nmea_buff, _nmea_buff[3], _nmea_buff[4], _nmea_buff[5]);
+		GPS_INFO("EMLIDREACH: NMEA message type unknown \n %s \n %c %c %c", _buff, _buff[3], _buff[4], _buff[5]);
 	}
 
 	return ret;
@@ -619,8 +726,8 @@ GPSDriverEmlidReach::computeNedVelocity()
 		_gps_position->vel_n_m_s = 0;
 		_gps_position->vel_e_m_s = 0;
 		_gps_position->vel_d_m_s = 0;
-		_gps_position->cog_rad = 0;		/**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
-		_gps_position->vel_ned_valid = false;	/**< Flag to indicate if NED speed is valid */
+		_gps_position->cog_rad = 0;	 /**< Course over ground (NOT heading, but direction of movement) in rad, -PI..PI */
+		_gps_position->vel_ned_valid = false; /**< Flag to indicate if NED speed is valid */
 		return;
 	}
 
@@ -635,7 +742,6 @@ GPSDriverEmlidReach::computeNedVelocity()
 	_gps_position->vel_ned_valid = true;
 	_rate_count_vel++;
 }
-
 
 
 

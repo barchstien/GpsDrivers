@@ -53,18 +53,29 @@ Questions:
 
 // Emlid documentation
 //   https://docs.emlid.com/reachm-plus/
+//   https://files.emlid.com/ERB.pdf
 // NMEA references
 //   https://en.wikipedia.org/wiki/NMEA_0183
 //   http://www.catb.org/gpsd/NMEA.html
 
-#define NMEA_SENTENCE_MAX_LEN	82	// includes '$',<CR> and <LF> 
-#define NMEA_CHECKSUM_LEN		2
+#define NMEA_SENTENCE_MAX_LEN  82  // includes '$',<CR> and <LF> 
+#define NMEA_CHECKSUM_LEN      2
 
+// Not using ERB_ID_SPACE_INFO
+//#define ERB_SENTENCE_MAX_LEN   (5+20*satellite_info_s::SAT_INFO_MAX_SATELLITES)
+#define ERB_SENTENCE_MAX_LEN   44
+#define ERB_CHECKSUM_LEN       2
+
+#define MAX_CONST(a, b) ((a>b) ? a : b)
+
+#define SENTENCE_MAX_LEN MAX_CONST(NMEA_SENTENCE_MAX_LEN, ERB_SENTENCE_MAX_LEN)
+#define CHECKSUM_LEN MAX_CONST(NMEA_CHECKSUM_LEN, ERB_CHECKSUM_LEN)
 
 /**
  * Driver class for Emlid Reach
- * Populates caller provided vehicle_gps_position_s when GGA received
- * Other NMEA messages are cached by the driver to complete messages emitted upon GGA
+ * Populates caller provided vehicle_gps_position_s and satellite_info_s
+ * Support and auto-detect ERB vs NMEA
+ * Some NMEA messages are cached by the driver to complete messages emitted upon GGA
  */
 class GPSDriverEmlidReach : public GPSHelper
 {
@@ -80,10 +91,15 @@ public:
 
 private:
 
+	enum class PARSER_TYPE {
+		NMEA = 0,
+		ERB
+	};
+
 	enum class NMEA_0183_State {
 		init = 0,
-		got_start_byte,		// $
-		got_checksum_byte,	// *
+		got_start_byte,    // $
+		got_checksum_byte, // *
 		wait_for_LF
 	};
 
@@ -94,8 +110,26 @@ private:
 		SIZE
 	};
 
+
+	enum class ERB_State {
+		init = 0,
+		got_sync_1,
+		got_sync_2,
+		got_id,
+		got_len_1,
+		got_len_2,
+		got_payload,
+		got_CK_A
+	};
+
+
+	union PARSER_STATE {
+		NMEA_0183_State nmea;
+		ERB_State       erb;
+	};
+
 	/** NMEA parser state machine */
-	NMEA_0183_State _decode_state{NMEA_0183_State::init};
+	PARSER_STATE _decode_state{NMEA_0183_State::init};
 
 	/** Buffer used to receive data from serial*/
 	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
@@ -106,11 +140,11 @@ private:
 	uint8_t *_read_buff_ptr{_read_buff + GPS_READ_BUFFER_SIZE};
 
 	/** Buffer used by parser to build NMEA sentences */
-	char _nmea_buff[NMEA_SENTENCE_MAX_LEN];
-	unsigned _nmea_buff_len{0};
+	char _buff[SENTENCE_MAX_LEN];
+	unsigned _buff_len{0};
 
 	/** Buffer used by parser to build NMEA checksum */
-	char _checksum_buff[NMEA_CHECKSUM_LEN + 1]{0, 0, '\0'};
+	char _checksum_buff[CHECKSUM_LEN + 1]{0, 0, '\0'};
 	unsigned _checksum_buff_len{0};
 
 	/** Pointer provided by caller, ie gps.cpp */
@@ -118,9 +152,15 @@ private:
 	/** Pointer provided by caller, gps.cpp */
 	struct satellite_info_s *_satellite_info {nullptr};
 
+	PARSER_TYPE _parser_type{PARSER_TYPE::ERB};
 	bool _testing_connection{false};
-	unsigned _nmea_parse_err_cnt{0};
+
+	unsigned _parse_err_cnt{0};
+	unsigned _sentence_cnt{0};
+	/*unsigned _nmea_parse_err_cnt{0};
 	unsigned _nmea_cnt{0};
+	unsigned _erb_parse_err_cnt{0};
+	unsigned _erb_cnt{0};*/
 
 
 	///// NMEA messages caches /////
@@ -140,15 +180,26 @@ private:
 
 	/** Set NMEA parser state when found $ start byte */
 	void nmeaParserRestart();
+
 	/** Feed NMEA parser with received bytes from serial 
 	 * @return len of decoded message, 0 if not completed, -1 if error
 	 */
-	int parseChar(uint8_t b);
+	int nmeaParseChar(uint8_t b);
 
-	/** Fit an NMEA sentence into vehicle_gps_position_s, to be used by caller, ie GPSHelper 
-	 *  @return true if gps_position has been updated
+	/** NMEA sentence into vehicle_gps_position_s or satellite_info_s, to be used by GPSHelper
+	 *  @return 1 if gps_position updated, 2 for satellite_info_s (can be bit OR), 0 for nothing
 	 */
 	int handleNmeaSentence();
+
+	/** Feed ERB parser with received bytes from serial 
+	 * @return len of decoded message, 0 if not completed, -1 if error
+	 */
+	int erbParseChar(uint8_t b);
+
+	/** ERB sentence into vehicle_gps_position_s or satellite_info_s, to be used by GPSHelper 
+	 *  @return 1 if gps_position updated, 2 for satellite_info_s (can be bit OR), 0 for nothing
+	 */
+	int handleErbSentence();
 
 	void computeNedVelocity();
 
