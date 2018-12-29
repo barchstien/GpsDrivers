@@ -179,8 +179,18 @@ private:
 
 
 	///// ERB messages caches /////
-	uint8_t _fix_type{0};
+	/*uint8_t _fix_type{0};
 	uint8_t _sat_in_view{0};
+	double _hdop{0};
+	double _vdop{0};
+	double _vel_m_s{0};
+	double _vel_n_m_s{0};
+	double _vel_e_m_s{0};
+	double _vel_d_m_s{0};
+	double _cog_rad{0};
+	double _s_variance_m_s{0};*/
+	vehicle_gps_position_s _position_tmp;
+	uint32_t _emlid_timestamp{0};
 
 
 	/** Satellite info for GA, GL, GP (galileo, glonass, gps) */
