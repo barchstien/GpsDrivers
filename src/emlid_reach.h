@@ -131,7 +131,7 @@ private:
 	};
 
 	/** NMEA parser state machine */
-	PARSER_STATE _decode_state{NMEA_0183_State::init};
+	PARSER_STATE _decode_state;
 
 	/** Buffer used to receive data from serial*/
 	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
@@ -139,7 +139,7 @@ private:
 	/** Pointer to next received byte to be processed, 
 	 *  as data may been left unprocessed after NMEA message completed
 	 */
-	uint8_t *_read_buff_ptr{_read_buff + GPS_READ_BUFFER_SIZE};
+	uint8_t *_read_buff_ptr{_read_buff + sizeof(_read_buff)};
 
 	/** Buffer used by parser to build NMEA sentences */
 	char _buff[SENTENCE_MAX_LEN];
@@ -176,6 +176,12 @@ private:
 	double _course_deg{-1};
 	/** epv from VTG message */
 	double _speed_kmph{0};
+
+
+	///// ERB messages caches /////
+	uint8_t _fix_type{0};
+	uint8_t _sat_in_view{0};
+
 
 	/** Satellite info for GA, GL, GP (galileo, glonass, gps) */
 	struct satellite_info_s _sat_info_array[static_cast<int>(NMEA_TALKER::SIZE)];

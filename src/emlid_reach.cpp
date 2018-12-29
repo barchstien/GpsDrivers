@@ -132,15 +132,20 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 			if (baudrate > 0 && baudrate != baud_allowed[i]) {
 				continue;
 			}
-			_parse_err_cnt = 0;
+
 			_sentence_cnt = 0;
+			_parse_err_cnt = 0;
 			_decode_state.nmea = NMEA_0183_State::init;
 			_decode_state.erb  = ERB_State::init;
+			_read_buff_len = 0;
+			_checksum_buff_len = 0;
+			_read_buff_ptr = _read_buff + GPS_READ_BUFFER_SIZE;
+			_erb_payload_len = 0;
 
 			if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
 				continue;
 			}
-			GPS_INFO("EmlidReach: testConnection: %d type: %s", baud_allowed[i], TYPE_STR(_parser_type));
+			//GPS_INFO("EmlidReach: testConnection: %d type: %s", baud_allowed[i], TYPE_STR(_parser_type));
 			if (! testConnection()) {
 				continue;
 			}
@@ -165,11 +170,11 @@ GPSDriverEmlidReach::testConnection()
 		&& _parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR
 		&& _sentence_cnt < AUTO_DETECT_MAX_READ_SENTENCE)
 	{
-		if (receive(50000) == 0) { // timeout larger than what defined in read() are truncated
+		if (receive(50000) == 0b100) { // timeout larger than what defined in read() are truncated
 			timeout_cnt ++;
 		}
 	}
-	GPS_WARN("+++++     _sentence_cnt %d  timeout_cnt %d  _parse_err_cnt %d", _sentence_cnt, timeout_cnt, _parse_err_cnt);
+	//GPS_WARN("+++++     _sentence_cnt %d  timeout_cnt %d  _parse_err_cnt %d", _sentence_cnt, timeout_cnt, _parse_err_cnt);
 
 	_testing_connection = false;
 	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
@@ -189,9 +194,7 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 				//GPS_INFO("_parse_err_cnt: %d", _parse_err_cnt);
 			} else {
 				// timeout occured
-				if (_testing_connection) {
-					return 0;
-				}
+				return 0b100; // no update to publish
 			}
 		} else {
 			// process data in buffer from previous read
@@ -277,7 +280,7 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 		_buff[_buff_len ++] = b;
 		_decode_state.erb = ERB_State::got_len_2;
 		_erb_payload_len = (b << 8) | _erb_payload_len;
-		GPS_INFO("EMLIDREACH: ERB payload len: %d", _erb_payload_len);
+		//GPS_INFO("EMLIDREACH: ERB payload len: %d", _erb_payload_len);
 		break;
 	case ERB_State::got_len_2:
 		if (_buff_len >= SENTENCE_MAX_LEN) {
@@ -306,7 +309,7 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 			ckb += cka;
 		}
 		if (cka == _checksum_buff[0] && ckb == _checksum_buff[1]) {
-			GPS_INFO("EMLIDREACH: ERB checksum OK");
+			//GPS_INFO("EMLIDREACH: ERB checksum OK");
 			ret = 1;
 		} else {
 			GPS_INFO("EMLIDREACH: ERB checksum NNNOK");
@@ -330,6 +333,96 @@ GPSDriverEmlidReach::handleErbSentence()
 	// debug tests
 	if (_testing_connection)
 		ret = 1;
+
+	// Starts here
+
+	if (_buff[2] == ERB_ID_VERSION) {
+		//GPS_INFO("EMLIDREACH: ERB version: %d.%d.%d", _buff[ERB_HEADER_LEN + 4], _buff[ERB_HEADER_LEN + 5], _buff[ERB_HEADER_LEN + 6]);
+	} else if (_buff[2] == ERB_ID_GEODIC_POSITION) {
+
+
+		_gps_position->timestamp = gps_absolute_time();
+
+		/* convert from degrees, minutes and seconds to degrees * 1e7 */
+		//_gps_position->lat = static_cast<int>((int(lat * 0.01) + (lat * 0.01 - int(lat * 0.01)) * 100.0 / 60.0) * 10000000);
+		//_gps_position->lon = static_cast<int>((int(lon * 0.01) + (lon * 0.01 - int(lon * 0.01)) * 100.0 / 60.0) * 10000000);
+		//_gps_position->alt = static_cast<int>(alt * 1000);
+
+		double tmp_double = 0.0;
+
+		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 4, sizeof(double));
+		GPS_INFO("EMLIDREACH: ERB lon: %2.7f", tmp_double);
+		_gps_position->lon = round(tmp_double * 1e7);
+
+		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 12, sizeof(double));
+		GPS_INFO("EMLIDREACH: ERB lat: %2.7f", tmp_double);
+		_gps_position->lat = round(tmp_double * 1e7);
+
+		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 20, sizeof(double));
+		GPS_INFO("EMLIDREACH: ERB alt elips: %2.7f", tmp_double);
+		_gps_position->alt_ellipsoid = round(tmp_double * 1e3);
+
+		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 28, sizeof(double));
+		GPS_INFO("EMLIDREACH: ERB alt: %2.7f", tmp_double);
+		_gps_position->alt = round(tmp_double * 1e3);
+
+		_rate_count_lat_lon++;
+
+		uint32_t tmp_uint32_t = 0;
+		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 36, sizeof(uint32_t));
+		_gps_position->eph = tmp_uint32_t;
+		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 40, sizeof(uint32_t));
+		_gps_position->epv = tmp_uint32_t;
+
+		_gps_position->vel_ned_valid = false;
+
+		if (_fix_type == 0) {
+			// no Fix
+			_gps_position->fix_type = 0;
+		} else if (_fix_type == 1) {
+			// Single
+			_gps_position->fix_type = 3; // TODO 2d vs 3d fix
+		} else if (_fix_type == 2) {
+			// RTK Float
+			_gps_position->fix_type = 5;
+		} else if (_fix_type == 3) {
+			// RTK Fix
+			_gps_position->fix_type = 6;
+		} else {
+			_gps_position->fix_type = 0;
+		}
+
+		_gps_position->satellites_used = _sat_in_view;
+#if 0
+		_gps_position->hdop = hdop;
+		_gps_position->vdop = 0;
+
+		// emlid forum says to calculate from last GPS position with low filter, for NMEA
+		computeNedVelocity();
+#endif
+		ret = 1;
+
+
+
+	} else if (_buff[2] == ERB_ID_NAV_STATUS) {
+		// TODO fix_status, is it NED validity ?
+		uint8_t tmp_uint8_t = 0;
+		memcpy(&_fix_type, _buff + ERB_HEADER_LEN + 6, sizeof(uint8_t));
+		memcpy(&tmp_uint8_t, _buff + ERB_HEADER_LEN + 6, sizeof(uint8_t));
+		memcpy(&_sat_in_view, _buff + ERB_HEADER_LEN + 8, sizeof(uint8_t));
+		GPS_INFO("EMLIDREACH: ERB _fix_type: %d fix status: %d _sat_in_view: %d", _fix_type, tmp_uint8_t, _sat_in_view);
+
+	} else if (_buff[2] == ERB_ID_DOPS) {
+
+	} else if (_buff[2] == ERB_ID_VELOCITY_NED) {
+
+	} else if (_buff[2] == ERB_ID_SPACE_INFO) {
+
+	} else if (_buff[2] == ERB_ID_RTK) {
+
+	} else {
+		GPS_WARN("EMLIDREACH: ERB ID not known: %d", _buff[2]);
+	}
 
 	return ret;
 }
@@ -505,7 +598,6 @@ GPSDriverEmlidReach::handleNmeaSentence()
 		EMLID_UNUSED(tmp_time);
 		EMLID_UNUSED(alt_unit);
 
-		// TODO where is this time coming from ?
 		_gps_position->timestamp = gps_absolute_time();
 
 		if (ns == 'S') {
