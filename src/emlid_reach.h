@@ -115,8 +115,8 @@ private:
 
 	enum class ERB_State {
 		init = 0,
-		got_sync_1,
-		got_sync_2,
+		got_sync_1,  // E
+		got_sync_2,  // R
 		got_id,
 		got_len_1,
 		got_len_2,
@@ -159,10 +159,6 @@ private:
 
 	unsigned _parse_err_cnt{0};
 	unsigned _sentence_cnt{0};
-	/*unsigned _nmea_parse_err_cnt{0};
-	unsigned _nmea_cnt{0};
-	unsigned _erb_parse_err_cnt{0};
-	unsigned _erb_cnt{0};*/
 
 	uint16_t _erb_payload_len{0};
 
@@ -179,18 +175,11 @@ private:
 
 
 	///// ERB messages caches /////
-	/*uint8_t _fix_type{0};
-	uint8_t _sat_in_view{0};
+	uint8_t _fix_type{0};
+	uint8_t _fix_status{0};
+	uint8_t _satellites_used{0};
 	double _hdop{0};
 	double _vdop{0};
-	double _vel_m_s{0};
-	double _vel_n_m_s{0};
-	double _vel_e_m_s{0};
-	double _vel_d_m_s{0};
-	double _cog_rad{0};
-	double _s_variance_m_s{0};*/
-	vehicle_gps_position_s _position_tmp;
-	uint32_t _emlid_timestamp{0};
 
 
 	/** Satellite info for GA, GL, GP (galileo, glonass, gps) */

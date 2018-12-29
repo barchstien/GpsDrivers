@@ -111,7 +111,6 @@ GPSDriverEmlidReach::GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback
 	_gps_position(gps_position), _satellite_info(satellite_info)
 {
 	memset(_sat_info_array, 0, static_cast<int>(NMEA_TALKER::SIZE) * sizeof(satellite_info_s));
-	memset(&_position_tmp, 0, sizeof(vehicle_gps_position_s));
 }
 
 
@@ -208,6 +207,12 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 				}
 				if (ret > 0) {
 					_sentence_cnt ++;
+
+					if (_testing_connection) {
+						// testing, not processing, good enugh to return here
+						return 0;
+					}
+
 					if (_parser_type == PARSER_TYPE::NMEA) {
 						ret = handleNmeaSentence();
 					} else {
@@ -281,7 +286,6 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 		_buff[_buff_len ++] = b;
 		_decode_state.erb = ERB_State::got_len_2;
 		_erb_payload_len = (b << 8) | _erb_payload_len;
-		//GPS_INFO("EMLIDREACH: ERB payload len: %d", _erb_payload_len);
 		break;
 	case ERB_State::got_len_2:
 		if (_buff_len >= SENTENCE_MAX_LEN) {
@@ -310,10 +314,9 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 			ckb += cka;
 		}
 		if (cka == _checksum_buff[0] && ckb == _checksum_buff[1]) {
-			//GPS_INFO("EMLIDREACH: ERB checksum OK");
 			ret = 1;
 		} else {
-			GPS_INFO("EMLIDREACH: ERB checksum NNNOK");
+			GPS_INFO("EMLIDREACH: ERB checksum NOK");
 			ret = 0;
 			_parse_err_cnt ++;
 		}
@@ -328,127 +331,123 @@ int
 GPSDriverEmlidReach::handleErbSentence()
 {
 	int ret = 0;
-	uint32_t timestamp_tmp = 0;
-
-	memcpy(&timestamp_tmp, _buff + ERB_HEADER_LEN, sizeof(uint32_t));
-	//GPS_WARN("EMLIDREACH: ERB TIMESTAMP %u    ID %d", timestamp_emlid, _buff[2]);
-
-	if (_emlid_timestamp != timestamp_tmp && _emlid_timestamp != 0) {
-		memcpy(_gps_position, &_position_tmp, sizeof(vehicle_gps_position_s));
-		memset(&_position_tmp, 0, sizeof(vehicle_gps_position_s));
-		ret = 1;
-	}
-	_emlid_timestamp = timestamp_tmp;
 
 	// debug tests
-	if (_testing_connection)
-		ret = 1;
-
-	uint32_t tmp_t = 0;
-	memcpy(&tmp_t, _buff + ERB_HEADER_LEN, sizeof(uint32_t));
-	//GPS_INFO("EMLIDREACH: ERB ===== timeGPS: %i  ID %i", tmp_t, _buff[2]);
-
-	// Starts here
+	//if (_testing_connection)
+	//	ret = 1;
 
 	if (_buff[2] == ERB_ID_VERSION) {
 		//GPS_INFO("EMLIDREACH: ERB version: %d.%d.%d", _buff[ERB_HEADER_LEN + 4], _buff[ERB_HEADER_LEN + 5], _buff[ERB_HEADER_LEN + 6]);
 
 	} else if (_buff[2] == ERB_ID_GEODIC_POSITION) {
+
+		if (_fix_status != 1) {
+			// Emlid doc: "If position and velocity are valid, it takes value 0x01, else it takes 0x00"
+			return 0;
+		}
+
 		double tmp_double = 0.0;
 		_gps_position->timestamp = gps_absolute_time();
 
 		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 4, sizeof(double));
-		_position_tmp.lon = round(tmp_double * 1e7);
+		_gps_position->lon = round(tmp_double * 1e7);
 
 		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 12, sizeof(double));
-		_position_tmp.lat = round(tmp_double * 1e7);
+		_gps_position->lat = round(tmp_double * 1e7);
 
 		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 20, sizeof(double));
-		_position_tmp.alt_ellipsoid = round(tmp_double * 1e3);
+		_gps_position->alt_ellipsoid = round(tmp_double * 1e3);
 
 		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 28, sizeof(double));
-		_position_tmp.alt = round(tmp_double * 1e3);
+		_gps_position->alt = round(tmp_double * 1e3);
 
 		_rate_count_lat_lon++;
 
 		uint32_t tmp_uint32_t = 0;
 		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 36, sizeof(uint32_t));
-		_position_tmp.eph = static_cast<double>(tmp_uint32_t) / 1e3;
+		_gps_position->eph = static_cast<double>(tmp_uint32_t) / 1e3;
 		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 40, sizeof(uint32_t));
-		_position_tmp.epv = static_cast<double>(tmp_uint32_t) / 1e3;
+		_gps_position->epv = static_cast<double>(tmp_uint32_t) / 1e3;
 
+		_gps_position->vel_ned_valid = false;
+
+		_gps_position->hdop = _hdop;
+		_gps_position->vdop = _vdop;
+
+		_gps_position->satellites_used = _satellites_used;
+		_gps_position->fix_type = _fix_type;
+
+		ret = 1;
 
 	} else if (_buff[2] == ERB_ID_NAV_STATUS) {
+		uint8_t fix_type = 0;
 
-		// TODO fix_status, is it NED validity ?
-		uint8_t fix_type = 0, fix_status = 0, sat_in_view = 0;
-
-		_gps_position->timestamp = gps_absolute_time();
+		uint8_t fix_status_last = _fix_status;
 
 		memcpy(&fix_type, _buff + ERB_HEADER_LEN + 6, sizeof(uint8_t));
-		memcpy(&fix_status, _buff + ERB_HEADER_LEN + 7, sizeof(uint8_t));
-		memcpy(&sat_in_view, _buff + ERB_HEADER_LEN + 8, sizeof(uint8_t));
-		//GPS_INFO("EMLIDREACH: ERB _fix_type: %d fix status: %d _sat_in_view: %d", _fix_type, tmp_uint8_t, _sat_in_view);
+		memcpy(&_fix_status, _buff + ERB_HEADER_LEN + 7, sizeof(uint8_t));
+		memcpy(&_satellites_used, _buff + ERB_HEADER_LEN + 8, sizeof(uint8_t));
+
+		if (fix_status_last != _fix_status)
+			GPS_WARN("EMLIDREACH: ERB _fix_status: %d", _fix_status);
 
 		if (fix_type == 0) {
 			// no Fix
-			_position_tmp.fix_type = 0;
+			_fix_type = 0;
 		} else if (fix_type == 1) {
 			// Single
-			_position_tmp.fix_type = (sat_in_view > 4) ? 3 : 2;
+			_fix_type = (_satellites_used > 4) ? 3 : 2;
 		} else if (fix_type == 2) {
 			// RTK Float
-			_position_tmp.fix_type = 5;
+			_fix_type = 5;
 		} else if (fix_type == 3) {
 			// RTK Fix
-			_position_tmp.fix_type = 6;
+			_fix_type = 6;
 		} else {
-			_position_tmp.fix_type = 0;
+			_fix_type = 0;
 		}
 
-		_position_tmp.satellites_used = sat_in_view;
 
 	} else if (_buff[2] == ERB_ID_DOPS) {
-
+		// TODO cache
 		uint16_t tmp_u16 = 0;
-		_gps_position->timestamp = gps_absolute_time();
 
 		memcpy(&tmp_u16, _buff + ERB_HEADER_LEN + 10, sizeof(uint16_t));
-		_position_tmp.hdop = static_cast<double>(tmp_u16) / 100.0;
+		_hdop = static_cast<double>(tmp_u16) / 100.0;
 		memcpy(&tmp_u16, _buff + ERB_HEADER_LEN + 8, sizeof(uint16_t));
-		_position_tmp.vdop = static_cast<double>(tmp_u16) / 100.0;
+		_vdop = static_cast<double>(tmp_u16) / 100.0;
 
 	} else if (_buff[2] == ERB_ID_VELOCITY_NED) {
+
+		if (_fix_status != 1) {
+			// Emlid doc: "If position and velocity are valid, it takes value 0x01, else it takes 0x00"
+			return 0;
+		}
 
 		int32_t tmp_i32 = 0;
 		uint32_t tmp_u32 = 0;
 		_gps_position->timestamp = gps_absolute_time();
 
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 4, sizeof(int32_t));
-		_position_tmp.vel_n_m_s = static_cast<double>(tmp_i32) / 100.0;
+		_gps_position->vel_n_m_s = static_cast<double>(tmp_i32) / 100.0;
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 8, sizeof(int32_t));
-		_position_tmp.vel_e_m_s = static_cast<double>(tmp_i32) / 100.0;
+		_gps_position->vel_e_m_s = static_cast<double>(tmp_i32) / 100.0;
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 12, sizeof(int32_t));
-		_position_tmp.vel_d_m_s = static_cast<double>(tmp_i32) / 100.0;
+		_gps_position->vel_d_m_s = static_cast<double>(tmp_i32) / 100.0;
 
 		memcpy(&tmp_u32, _buff + ERB_HEADER_LEN + 16, sizeof(uint32_t));
-		_position_tmp.vel_m_s = static_cast<double>(tmp_u32) / 100.0;
+		_gps_position->vel_m_s = static_cast<double>(tmp_u32) / 100.0;
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 20, sizeof(int32_t));
-		_position_tmp.cog_rad = (static_cast<double>(tmp_i32) / 1e5) * GPS_PI / 180;
-		//GPS_WARN("EMLIDREACH: ERB heading 1e-5 deg : %i", tmp_i32);
-		//GPS_WARN("EMLIDREACH: ERB heading rad : %2.5f", _cog_rad);
+		_gps_position->cog_rad = (static_cast<double>(tmp_i32) / 1e5) * GPS_PI / 180;
 
 		memcpy(&tmp_u32, _buff + ERB_HEADER_LEN + 24, sizeof(uint32_t));
-		_position_tmp.s_variance_m_s = static_cast<double>(tmp_u32) / 100.0;
+		_gps_position->s_variance_m_s = static_cast<double>(tmp_u32) / 100.0;
 
-		_position_tmp.vel_ned_valid = true;
+		_gps_position->vel_ned_valid = true;
 		_rate_count_vel++;
-#if 0
-		memcpy(_gps_position, &_position_tmp, sizeof(vehicle_gps_position_s));
-		_gps_position->timestamp = gps_absolute_time();
-		memset(&_position_tmp, 0, sizeof(vehicle_gps_position_s));
+
 		ret = 1;
-#endif
+
 	} else if (_buff[2] == ERB_ID_SPACE_INFO) {
 
 	} else if (_buff[2] == ERB_ID_RTK) {
