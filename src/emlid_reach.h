@@ -162,6 +162,10 @@ private:
 
 	uint16_t _erb_payload_len{0};
 
+	uint32_t _last_POS_timeGPS{0};
+	uint32_t _last_VEL_timeGPS{0};
+	bool _POS_received{false};
+	bool _VEL_received{false};
 
 	///// NMEA messages caches /////
 	/** eph from GST message */

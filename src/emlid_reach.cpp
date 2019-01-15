@@ -349,6 +349,8 @@ GPSDriverEmlidReach::handleErbSentence()
 		double tmp_double = 0.0;
 		_gps_position->timestamp = gps_absolute_time();
 
+		memcpy(&_last_POS_timeGPS, _buff + ERB_HEADER_LEN, sizeof(uint32_t));
+
 		memcpy(&tmp_double, _buff + ERB_HEADER_LEN + 4, sizeof(double));
 		_gps_position->lon = round(tmp_double * 1e7);
 
@@ -365,9 +367,9 @@ GPSDriverEmlidReach::handleErbSentence()
 
 		uint32_t tmp_uint32_t = 0;
 		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 36, sizeof(uint32_t));
-		_gps_position->eph = static_cast<double>(tmp_uint32_t) / 1e3;
+		_gps_position->eph = static_cast<double>(tmp_uint32_t) * 1e-3;
 		memcpy(&tmp_uint32_t, _buff + ERB_HEADER_LEN + 40, sizeof(uint32_t));
-		_gps_position->epv = static_cast<double>(tmp_uint32_t) / 1e3;
+		_gps_position->epv = static_cast<double>(tmp_uint32_t) * 1e-3;
 
 		_gps_position->vel_ned_valid = false;
 
@@ -377,7 +379,7 @@ GPSDriverEmlidReach::handleErbSentence()
 		_gps_position->satellites_used = _satellites_used;
 		_gps_position->fix_type = _fix_type;
 
-		ret = 1;
+		_POS_received = true;
 
 	} else if (_buff[2] == ERB_ID_NAV_STATUS) {
 		uint8_t fix_type = 0;
@@ -428,6 +430,8 @@ GPSDriverEmlidReach::handleErbSentence()
 		uint32_t tmp_u32 = 0;
 		_gps_position->timestamp = gps_absolute_time();
 
+		memcpy(&_last_VEL_timeGPS, _buff + ERB_HEADER_LEN, sizeof(uint32_t));
+
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 4, sizeof(int32_t));
 		_gps_position->vel_n_m_s = static_cast<double>(tmp_i32) / 100.0;
 		memcpy(&tmp_i32, _buff + ERB_HEADER_LEN + 8, sizeof(int32_t));
@@ -446,7 +450,7 @@ GPSDriverEmlidReach::handleErbSentence()
 		_gps_position->vel_ned_valid = true;
 		_rate_count_vel++;
 
-		ret = 1;
+		_VEL_received = true;
 
 	} else if (_buff[2] == ERB_ID_SPACE_INFO) {
 
@@ -454,6 +458,12 @@ GPSDriverEmlidReach::handleErbSentence()
 
 	} else {
 		GPS_WARN("EMLIDREACH: ERB ID not known: %d", _buff[2]);
+	}
+
+	if (_POS_received && _VEL_received && _last_POS_timeGPS == _last_VEL_timeGPS) {
+		ret = 1;
+		_POS_received = false;
+		_VEL_received = false;
 	}
 
 	return ret;
