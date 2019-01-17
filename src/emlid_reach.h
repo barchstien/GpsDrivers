@@ -73,10 +73,10 @@
 class GPSDriverEmlidReach : public GPSHelper
 {
 public:
-	GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user, 
-		struct vehicle_gps_position_s *gps_position,
-		struct satellite_info_s *satellite_info
-	);
+	GPSDriverEmlidReach(GPSCallbackPtr callback, void *callback_user,
+			    struct vehicle_gps_position_s *gps_position,
+			    struct satellite_info_s *satellite_info
+			   );
 	virtual ~GPSDriverEmlidReach() = default;
 
 	int receive(unsigned timeout) override;
@@ -127,7 +127,7 @@ private:
 	/** Buffer used to receive data from serial*/
 	uint8_t _read_buff[GPS_READ_BUFFER_SIZE];
 	unsigned _read_buff_len{0};
-	/** Pointer to next received byte to be processed, 
+	/** Pointer to next received byte to be processed,
 	 *  as data may been left unprocessed after NMEA message completed
 	 */
 	uint8_t *_read_buff_ptr{_read_buff + sizeof(_read_buff)};
@@ -137,7 +137,7 @@ private:
 	unsigned _buff_len{0};
 
 	/** Buffer used by parser to build NMEA checksum */
-	char _checksum_buff[CHECKSUM_LEN + 1]{0, 0, '\0'};
+	char _checksum_buff[CHECKSUM_LEN + 1] {0, 0, '\0'};
 	unsigned _checksum_buff_len{0};
 
 	/** Pointer provided by caller, ie gps.cpp */
@@ -185,7 +185,7 @@ private:
 	/** Set NMEA parser state when found $ start byte */
 	void nmeaParserRestart();
 
-	/** Feed NMEA parser with received bytes from serial 
+	/** Feed NMEA parser with received bytes from serial
 	 * @return len of decoded message, 0 if not completed, -1 if error
 	 */
 	int nmeaParseChar(uint8_t b);
@@ -195,12 +195,12 @@ private:
 	 */
 	int handleNmeaSentence();
 
-	/** Feed ERB parser with received bytes from serial 
+	/** Feed ERB parser with received bytes from serial
 	 * @return len of decoded message, 0 if not completed, -1 if error
 	 */
 	int erbParseChar(uint8_t b);
 
-	/** ERB sentence into vehicle_gps_position_s or satellite_info_s, to be used by GPSHelper 
+	/** ERB sentence into vehicle_gps_position_s or satellite_info_s, to be used by GPSHelper
 	 *  @return 1 if gps_position updated, 2 for satellite_info_s (can be bit OR), 0 for nothing
 	 */
 	int handleErbSentence();
