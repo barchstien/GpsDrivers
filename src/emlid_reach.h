@@ -37,15 +37,6 @@
  * @author Bastien Auneau <bastien.auneau@while-true.fr>
  */
 
-/***********************
-Questions:
- 1. TODO support ERB https://files.emlid.com/ERB.pdf
- 3. TODO time_utc_usec
- 4. gps_absolute_time() whereis it from ? <--- usec since close to start, always counting up
- 5. TODO ? date set upon RMV msg ?... not sure coz want to do ERB now...
-************************/
-
-
 #pragma once
 
 #include "gps_helper.h"
@@ -61,12 +52,11 @@ Questions:
 #define NMEA_SENTENCE_MAX_LEN  82  // includes '$',<CR> and <LF> 
 #define NMEA_CHECKSUM_LEN      2
 
-// TODO remove sync bytes from buff, coz not used by checksum
-#define ERB_HEADER_LEN       5
-// Not using ERB_ID_SPACE_INFO
+#define ERB_HEADER_LEN           5
+// Not using ERB_ID_SPACE_INFO, so use a smaller buff length
 //#define ERB_SENTENCE_MAX_LEN   (5+20*satellite_info_s::SAT_INFO_MAX_SATELLITES)
-#define ERB_SENTENCE_MAX_LEN 44 + ERB_HEADER_LEN
-#define ERB_CHECKSUM_LEN     2
+#define ERB_SENTENCE_MAX_LEN     (44 + ERB_HEADER_LEN)
+#define ERB_CHECKSUM_LEN         2
 
 #define MAX_CONST(a, b) ((a>b) ? a : b)
 
@@ -75,9 +65,10 @@ Questions:
 
 /**
  * Driver class for Emlid Reach
- * Populates caller provided vehicle_gps_position_s and satellite_info_s
+ * Populates caller provided vehicle_gps_position_s and satellite_info_s (NMEA only)
  * Support and auto-detect ERB vs NMEA
  * Some NMEA messages are cached by the driver to complete messages emitted upon GGA
+ * Some ERB messages are cached and correlated by timestamp before publishing it
  */
 class GPSDriverEmlidReach : public GPSHelper
 {

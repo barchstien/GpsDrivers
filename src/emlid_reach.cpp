@@ -81,7 +81,7 @@
 #define NMEA_Vector_Track_and_speed_over_Ground "VTG" //< GN talker only
 
 //// ERB
-// 'R' Ox82 | 'E' Ox45 | ID | LENGTH (2B little endian) | payload | CHECKSUM (2B)
+// 'E' Ox45 | 'R' Ox52 | ID | LENGTH (2 Bytes little endian) | payload | CHECKSUM (2B)
 #define ERB_SYNC_1 0x45 // E
 #define ERB_SYNC_2 0x52 // R
 
@@ -91,7 +91,7 @@
 #define ERB_ID_DOPS            0x04
 #define ERB_ID_VELOCITY_NED    0x05
 #define ERB_ID_SPACE_INFO      0x06 // not used, reduces stack usage
-#define ERB_ID_RTK             0x07 // RTK, TODO really ?
+#define ERB_ID_RTK             0x07 // RTK, TODO
 
 
 #define EMLID_UNUSED(x) (void)x;
@@ -145,7 +145,7 @@ GPSDriverEmlidReach::configure(unsigned &baudrate, OutputMode output_mode)
 			if (GPSHelper::setBaudrate(baud_allowed[i]) != 0) {
 				continue;
 			}
-			//GPS_INFO("EmlidReach: testConnection: %d type: %s", baud_allowed[i], TYPE_STR(_parser_type));
+
 			if (! testConnection()) {
 				continue;
 			}
@@ -174,7 +174,6 @@ GPSDriverEmlidReach::testConnection()
 			timeout_cnt ++;
 		}
 	}
-	//GPS_WARN("+++++     _sentence_cnt %d  timeout_cnt %d  _parse_err_cnt %d", _sentence_cnt, timeout_cnt, _parse_err_cnt);
 
 	_testing_connection = false;
 	return timeout_cnt < AUTO_DETECT_MAX_TIMEOUT && _parse_err_cnt < AUTO_DETECT_MAX_PARSE_ERR;
@@ -190,8 +189,6 @@ GPSDriverEmlidReach::receive(unsigned timeout)
 			_read_buff_len = read(_read_buff, sizeof(_read_buff), timeout);
 			if (_read_buff_len > 0) {
 				_read_buff_ptr = _read_buff;
-				//GPS_INFO("ERB: %s", _read_buff);
-				//GPS_INFO("_parse_err_cnt: %d", _parse_err_cnt);
 			} else {
 				// timeout occured
 				return 0b100; // no update to publish
@@ -291,7 +288,7 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 		if (_buff_len >= SENTENCE_MAX_LEN) {
 			_decode_state.erb = ERB_State::init;
 			_parse_err_cnt ++;
-			GPS_INFO("EMLIDREACH: ERB payload overflow");
+			//GPS_INFO("EMLIDREACH: ERB payload overflow");
 		} else {
 			_buff[_buff_len ++] = b;
 		}
@@ -316,7 +313,7 @@ GPSDriverEmlidReach::erbParseChar(uint8_t b)
 		if (cka == _checksum_buff[0] && ckb == _checksum_buff[1]) {
 			ret = 1;
 		} else {
-			GPS_INFO("EMLIDREACH: ERB checksum NOK");
+			//GPS_INFO("EMLIDREACH: ERB checksum NOK");
 			ret = 0;
 			_parse_err_cnt ++;
 		}
@@ -332,19 +329,10 @@ GPSDriverEmlidReach::handleErbSentence()
 {
 	int ret = 0;
 
-	// debug tests
-	//if (_testing_connection)
-	//	ret = 1;
-
 	if (_buff[2] == ERB_ID_VERSION) {
 		//GPS_INFO("EMLIDREACH: ERB version: %d.%d.%d", _buff[ERB_HEADER_LEN + 4], _buff[ERB_HEADER_LEN + 5], _buff[ERB_HEADER_LEN + 6]);
 
 	} else if (_buff[2] == ERB_ID_GEODIC_POSITION) {
-
-		if (_fix_status != 1) {
-			// Emlid doc: "If position and velocity are valid, it takes value 0x01, else it takes 0x00"
-			return 0;
-		}
 
 		double tmp_double = 0.0;
 		_gps_position->timestamp = gps_absolute_time();
@@ -383,15 +371,14 @@ GPSDriverEmlidReach::handleErbSentence()
 
 	} else if (_buff[2] == ERB_ID_NAV_STATUS) {
 		uint8_t fix_type = 0;
+		//uint8_t fix_status_last = _fix_status;
 
-		uint8_t fix_status_last = _fix_status;
+		fix_type = _buff[ERB_HEADER_LEN + 6];
+		_fix_status = _buff[ERB_HEADER_LEN + 7];
+		_satellites_used = _buff[ERB_HEADER_LEN + 8];
 
-		memcpy(&fix_type, _buff + ERB_HEADER_LEN + 6, sizeof(uint8_t));
-		memcpy(&_fix_status, _buff + ERB_HEADER_LEN + 7, sizeof(uint8_t));
-		memcpy(&_satellites_used, _buff + ERB_HEADER_LEN + 8, sizeof(uint8_t));
-
-		if (fix_status_last != _fix_status)
-			GPS_WARN("EMLIDREACH: ERB _fix_status: %d", _fix_status);
+		//if (fix_status_last != _fix_status)
+		//	GPS_WARN("EMLIDREACH: ERB _fix_status: %d", _fix_status);
 
 		if (fix_type == 0) {
 			// no Fix
@@ -411,7 +398,6 @@ GPSDriverEmlidReach::handleErbSentence()
 
 
 	} else if (_buff[2] == ERB_ID_DOPS) {
-		// TODO cache
 		uint16_t tmp_u16 = 0;
 
 		memcpy(&tmp_u16, _buff + ERB_HEADER_LEN + 10, sizeof(uint16_t));
@@ -420,11 +406,6 @@ GPSDriverEmlidReach::handleErbSentence()
 		_vdop = static_cast<double>(tmp_u16) / 100.0;
 
 	} else if (_buff[2] == ERB_ID_VELOCITY_NED) {
-
-		if (_fix_status != 1) {
-			// Emlid doc: "If position and velocity are valid, it takes value 0x01, else it takes 0x00"
-			return 0;
-		}
 
 		int32_t tmp_i32 = 0;
 		uint32_t tmp_u32 = 0;
@@ -460,7 +441,11 @@ GPSDriverEmlidReach::handleErbSentence()
 		GPS_WARN("EMLIDREACH: ERB ID not known: %d", _buff[2]);
 	}
 
-	if (_POS_received && _VEL_received && _last_POS_timeGPS == _last_VEL_timeGPS) {
+	// Emlid doc: "If position and velocity are valid, it takes value 0x01, else it takes 0x00"
+	if (_fix_status == 1 
+		&& _POS_received && _VEL_received 
+		&& _last_POS_timeGPS == _last_VEL_timeGPS)
+	{
 		ret = 1;
 		_POS_received = false;
 		_VEL_received = false;
